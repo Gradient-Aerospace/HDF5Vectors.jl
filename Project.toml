@@ -1,0 +1,24 @@
+name = "HDF5Vectors"
+uuid = "7098961b-d60d-42aa-8832-e11a9f96377b"
+version = "0.1.0"
+authors = ["Tucker McClure <tucker@gradient.team>"]
+
+[deps]
+HDF5 = "f67ccb44-e63f-5c2f-98bd-6dc0ccc4ba2f"
+Serialization = "9e88b42a-f829-5b0c-bbe9-9e923198166b"
+StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
+
+[weakdeps]
+JSON3 = "0f8b85d8-7281-11e9-16c2-39a750bddbf1"
+
+[extensions]
+HDF5VectorsJSON3Ext = "JSON3"
+
+[compat]
+HDF5 = "0.17.2"
+JSON3 = "1.14.3"
+Serialization = "1.11.0"
+StaticArrays = "1.9.15"
+
+[workspace]
+projects = ["test"]

@@ -1,0 +1,7 @@
+[deps]
+EnumX = "4e289a0a-7415-4d19-859d-a7e5c4648b56"
+HDF5 = "f67ccb44-e63f-5c2f-98bd-6dc0ccc4ba2f"
+HDF5Vectors = "7098961b-d60d-42aa-8832-e11a9f96377b"
+JSON3 = "0f8b85d8-7281-11e9-16c2-39a750bddbf1"
+StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
