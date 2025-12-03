@@ -12,3 +12,7 @@ makedocs(;
         "Custom HDF5 Vector Types" => "custom_vector_types.md",
     ],
 )
+
+deploydocs(
+    repo = "github.com/Gradient-Aerospace/HDF5Vectors.jl.git",
+)
