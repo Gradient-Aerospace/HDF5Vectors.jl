@@ -132,23 +132,23 @@ struct MyType
 end
 ```
 
-If the HDF5 vector were created in the "/my_group" group with the name "my_type", those would be stored portably like so:
+If the HDF5 vector were created in the `/my_group` group with the name `my_type`, those would be stored portably like so:
 
 ```
-/my_group/my_type/                  # Group
-/my_group/my_type/arrays/a          # Array of 100 Float64
-/my_group/my_type/arrays/b          # Group
-/my_group/my_type/arrays/b/arrays/c # Array of 100 Int64
-/my_group/my_type/arrays/b/arrays/d # Array of 2-by-100 Float64
+/my_group/my_type/               # Group
+/my_group/my_type/data/a         # Array of 100 Float64
+/my_group/my_type/data/b         # Group
+/my_group/my_type/data/b/data/c  # Array of 100 Int64
+/my_group/my_type/data/b/data/d  # Array of 2-by-100 Float64
 ```
 
-For bits-type structs, a user can specify that they want "non-portable" storage. This means that HDF5.jl package can define a custom HDF5 type to store the struct, and the resulting HDF5 file will look like this:
+For bits-type structs, a user can specify that they want "non-portable" storage. This means that the HDF5.jl package can define a custom HDF5 type to store the struct, and the resulting HDF5 file will look like this:
 
 ```
 /my_group/my_type/ # An array of the HDF5 custom type
 ```
 
-This is much faster and more efficient, but accessing it outside of Julia will require substantially more code to work with the HDF5 test definition system.
+This is much faster and more efficient, but accessing it outside of Julia will require substantially more code to work with the HDF5 type definition system.
 
 ### Serialized Types
 
@@ -190,3 +190,11 @@ HDF5.h5open("server_details.h5", "w") do fid
     @show collect(details)
 end
 ```
+
+The HDF5 file will have the following:
+
+```
+/details/data/json/data # An array of JSON strings, one for each of the pushed elements
+```
+
+(By default, the JSON is compact in style, not "pretty", to reduce the extra storage burden of all of those spaces. You can "pretty" on extraction from the HDF5 file if a human is supposed to look at it.)
