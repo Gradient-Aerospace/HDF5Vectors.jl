@@ -203,6 +203,17 @@ end
 # Use the iterable form rather than trying to iterate via getindex.
 Base.map(f, arr::AbstractHDF5Vector) = map(f, iterable(arr))
 
+# Range and vector indexing should behave like any other AbstractVector and return a plain
+# Julia Vector. We intentionally construct this from scalar indexing so all storage backends
+# (elemental, array-ish, composite, serialized) share one consistent behavior.
+function Base.getindex(arr::AbstractHDF5Vector, k::AbstractRange{<:Integer})
+    return [arr[j] for j in k]
+end
+function Base.getindex(arr::AbstractHDF5Vector, k::AbstractVector{<:Integer})
+    return [arr[j] for j in k]
+end
+Base.getindex(arr::AbstractHDF5Vector, ::Colon) = collect(arr)
+
 abstract type AbstractHDF5VectorIterator{T} end
 
 # This loads all of the data up front and then iterates over it, but we could make a
@@ -394,7 +405,7 @@ Base.length(arr::HDF5VectorOfElementalTypes) = arr.count # Common with HDF5Vecto
 function Base.setindex!(arr::HDF5VectorOfElementalTypes{T, DT}, el, k) where {T, DT}
     arr.dataset[k] = deconstruct(arr, el)
 end
-function Base.getindex(arr::HDF5VectorOfElementalTypes{T, DT}, k) where {T, DT}
+function Base.getindex(arr::HDF5VectorOfElementalTypes{T, DT}, k::Int) where {T, DT}
     # construct(T, read(arr.dataset, DT, k))
     construct(arr, read(arr.dataset, DT, k))
 end
@@ -462,7 +473,7 @@ Base.length(arr::HDF5VectorOfArrayishTypes) = arr.count
 function Base.setindex!(arr::HDF5VectorOfArrayishTypes{T, D, DT}, el, k) where {T, D, DT}
     arr.dataset[colons(D)..., k] = deconstruct(arr, el)
 end
-function Base.getindex(arr::HDF5VectorOfArrayishTypes{T, D, DT}, k) where {T, D, DT}
+function Base.getindex(arr::HDF5VectorOfArrayishTypes{T, D, DT}, k::Int) where {T, D, DT}
     # construct(T, read(arr.dataset, DT, colons(D)..., k))
     construct(arr, read(arr.dataset, DT, colons(D)..., k))
 end
@@ -546,7 +557,7 @@ function deserialize_from_vector!(io, byte_array::Vector{UInt8}, start, stop)
     seekstart(io)
     Serialization.deserialize(io) # This reads everything, resetting the buffer.
 end
-function Base.getindex(arr::HDF5VectorWithByteArrayStorage{T}, k) where {T}
+function Base.getindex(arr::HDF5VectorWithByteArrayStorage{T}, k::Int) where {T}
     stop = arr.stops[k]
     start = k == 1 ? 1 : arr.stops[k-1] + 1
     range = Int64(start) : Int64(stop)
@@ -617,7 +628,7 @@ end
 
 # This assumes the struct can be created with its individual fields, which isn't perfectly
 # general, but what else can we do? Something with StructTypes?
-function Base.getindex(arr::HDF5VectorOfCompositeTypes{T}, k) where {T}
+function Base.getindex(arr::HDF5VectorOfCompositeTypes{T}, k::Int) where {T}
     return construct(arr, ((getindex(sub_array, k) for sub_array in arr.arrays)...,))
 end
 

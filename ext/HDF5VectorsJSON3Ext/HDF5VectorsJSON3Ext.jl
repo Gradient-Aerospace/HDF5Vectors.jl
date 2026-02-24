@@ -37,7 +37,7 @@ function Base.setindex!(arr::HDF5VectorWithJSONStorage, el, k)
     setindex!(arr.storage, JSON3.write(el), k)
     return el
 end
-function Base.getindex(arr::HDF5VectorWithJSONStorage{T}, k) where {T}
+function Base.getindex(arr::HDF5VectorWithJSONStorage{T}, k::Int) where {T}
     return JSON3.read(getindex(arr.storage, k), T)
 end
 function Base.collect(arr::HDF5VectorWithJSONStorage{T}) where {T}
