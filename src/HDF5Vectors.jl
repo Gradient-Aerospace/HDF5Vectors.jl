@@ -150,20 +150,36 @@ HDF5Vectors.storage_style(::Type{MyType}; kwargs...) = HDF5Vectors.ByteArrayStor
 """
 function storage_style(el_type::Type; portable = true, kwargs...)
 
-    if isbitstype(el_type) && !portable
+    # The HDF5-native types don't even get here. They have their own storage_style. If we're
+    # here, then we have no other specified storage style to use, and we need to figure out
+    # a safe on.
 
-        # These use the Julia type as the HDF5 type.
-        return ElementalStorageStyle(el_type)
+    # We can figure out the fields of concrete types.
+    if isconcretetype(el_type)
 
-    elseif isconcretetype(el_type)
+        if length(fieldnames(el_type)) == 0
 
-        # If it's concrete, then at least we can figure out its structure.
-        return CompositeStorageStyle()
+            # First, if the type appears to be empty, we'll just go with the empty style.
+            return EmptyStorageStyle(el_type)
+
+        elseif isbitstype(el_type) && !portable
+
+            # We can log bits types as elementals, but that's obviously not portable, so
+            # only do this if the user doesn't care to have a portable HDF5 file.
+            return ElementalStorageStyle(el_type)
+
+        else
+
+            # If it's not one of those special cases, we can likely log it as a composite
+            # style.
+            return CompositeStorageStyle()
+
+        end
 
     else
 
-        # If it's not concrete, we won't be able to figure out its structure.
-        # Serialization is our only option.
+        # Otherwise, we don't know the structure of this type and have no other way to log
+        # it, so we'll serialize it as a fallback.
         return ByteArrayStorageStyle()
 
     end
@@ -492,10 +508,18 @@ function Base.getindex(arr::HDF5VectorOfEmptyTypes{T, DT}, k::Int) where {T, DT}
     if k <= 0 || k > arr.count
         error("Index $k was out of bounds: [1, $(arr.count)].")
     end
-    return T()
+    if T === NamedTuple{(), Tuple{}}
+        return (;) # Weird special case because NamedTuple{(), Tuple{}}() doesn't work.
+    else
+        return T()
+    end
 end
 function Base.collect(arr::HDF5VectorOfEmptyTypes{T, DT}) where {T, DT}
-    return [T() for _ in 1:arr.count]
+    if T === NamedTuple{(), Tuple{}}
+        return [(;) for _ in 1:arr.count] # Weird special case.
+    else
+        return [T() for _ in 1:arr.count]
+    end
 end
 
 function Base.push!(arr::HDF5VectorOfEmptyTypes, el)
@@ -684,7 +708,12 @@ function load_hdf5_vector(style::CompositeStorageStyle, group_or_dataset, el_typ
         load_hdf5_vector(this_group["data"][string(fn)], ft; kwargs...)
         for (fn, ft) in zip(fieldnames(el_type), fieldtypes(el_type))
     ]
-    return HDF5VectorOfCompositeTypes{el_type}(arrays, length(first(arrays)))
+    if isempty(arrays)
+        @show el_type
+        return HDF5VectorOfCompositeTypes{el_type}(arrays, 0)
+    else
+        return HDF5VectorOfCompositeTypes{el_type}(arrays, length(first(arrays)))
+    end
 end
 
 Base.length(arr::HDF5VectorOfCompositeTypes) = arr.count

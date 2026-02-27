@@ -102,10 +102,13 @@ struct MyNoncreteType
     x::NamedTuple
 end
 
+struct MyEmptyType
+end
+
 out_dir = "out"
 mkpath("out")
 
-@testset "elemental types" begin
+@testset "elemental types (portable = $portable)" for portable in (true, false)
     h5open("$out_dir/elemental_types.h5", "w") do fid
         test_collection(fid, "ints", collect(1 : 10); native = true)
         test_collection(fid, "floats", collect(1. : 12.); native = true)
@@ -117,7 +120,7 @@ mkpath("out")
     end
 end
 
-@testset "array types" begin
+@testset "array types (portable = $portable)" for portable in (true, false)
     h5open("$out_dir/array_types.h5", "w") do fid
         test_collection(fid, "ntuples_of_ints", [(k, 2k) for k in 1:11])
         test_collection(fid, "svectors_of_floats", [SA_F64[k, 2k, 3k] for k in 1:12])
@@ -132,14 +135,17 @@ end
     end
 end
 
-@testset "empty types" begin
+@testset "empty types (portable = $portable)" for portable in (true, false)
+    create_kwargs = (; portable, )
     h5open("$out_dir/empty_types.h5", "w") do fid
-        test_collection(fid, "empty_ntuples", [Tuple{}() for k in 1:11])
-        test_collection(fid, "empty_svectors_of_floats", [SVector{0, Float64}() for k in 1:12])
+        test_collection(fid, "empty_ntuples", [Tuple{}() for k in 1:11]; create_kwargs)
+        test_collection(fid, "empty_svectors_of_floats", [SVector{0, Float64}() for k in 1:12]; create_kwargs)
+        test_collection(fid, "empty_types", [MyEmptyType() for _ in 1:10]; create_kwargs)
+        test_collection(fid, "empty_named_tuples", [(;) for _ in 1:10]; create_kwargs)
     end
 end
 
-@testset "composite types" for portable in (true, false)
+@testset "composite types (portable = $portable)" for portable in (true, false)
     create_kwargs = (; portable, )
     h5open("$out_dir/composite_types" * (portable ? "_portable" : "") * ".h5", "w") do fid
         test_collection(fid, "complex_numbers", [k * (1. + 2im) for k in 1:11]; create_kwargs) # HDF5 will handle this natively, but for portability, we use a composite type.
@@ -161,7 +167,7 @@ end
 
 @testset "serialization types" begin
     h5open("$out_dir/serialization_types.h5", "w") do fid
-        test_collection(fid, "noncrete_types", [MyNoncreteType((; k, )) for k in 1:10])
+        test_collection(fid, "nonconcrete_types", [MyNoncreteType((; k, )) for k in 1:10])
         test_collection(fid, "serializing_types", [MySerializingType(string(k), [k, 2k, 3k], MyType(4k, 5k)) for k in 1:11])
         test_collection(fid, "json_types", [MyJSONishType(string(k), [k, 2k, 3k], MyType(4k, 5k)) for k in 1:11])
     end
