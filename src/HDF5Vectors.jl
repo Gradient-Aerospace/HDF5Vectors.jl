@@ -149,11 +149,25 @@ HDF5Vectors.storage_style(::Type{MyType}; kwargs...) = HDF5Vectors.ByteArrayStor
 ```
 """
 function storage_style(el_type::Type; portable = true, kwargs...)
+
     if isbitstype(el_type) && !portable
-        return ElementalStorageStyle(el_type) # Use the Julia type as the HDF5 type.
-    else
+
+        # These use the Julia type as the HDF5 type.
+        return ElementalStorageStyle(el_type)
+
+    elseif isconcretetype(el_type)
+
+        # If it's concrete, then at least we can figure out its structure.
         return CompositeStorageStyle()
+
+    else
+
+        # If it's not concrete, we won't be able to figure out its structure.
+        # Serialization is our only option.
+        return ByteArrayStorageStyle()
+
     end
+
 end
 
 """

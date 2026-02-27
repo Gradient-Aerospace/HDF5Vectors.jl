@@ -94,20 +94,24 @@ end
 HDF5Vectors.storage_style(::Type{MyJSONishType}; kwargs...) = HDF5Vectors.JSONStorageStyle()
 Base.:(==)(a::MyJSONishType, b::MyJSONishType) = a.x == b.x && a.y == b.y && a.z == b.z
 
+struct MyNoncreteType
+    x::NamedTuple
+end
+
 out_dir = "out"
 mkpath("out")
 
-# @testset "elemental types" begin
-#     h5open("$out_dir/elemental_types.h5", "w") do fid
-#         test_collection(fid, "ints", collect(1 : 10); native = true)
-#         test_collection(fid, "floats", collect(1. : 12.); native = true)
-#         test_collection(fid, "enums", [sparrowhawk, hawk, sparrow])
-#         test_collection(fid, "enumxs", [Ungulates.horse, Ungulates.deer, Ungulates.bison, Ungulates.deer, Ungulates.horse, Ungulates.deer])
-#         test_collection(fid, "chars", collect('a' : 'z'))
-#         test_collection(fid, "strings", collect("element $k" for k in 1:9); native = true)
-#         test_collection(fid, "symbols", [:a for _ in 1:9])
-#     end
-# end
+@testset "elemental types" begin
+    h5open("$out_dir/elemental_types.h5", "w") do fid
+        test_collection(fid, "ints", collect(1 : 10); native = true)
+        test_collection(fid, "floats", collect(1. : 12.); native = true)
+        test_collection(fid, "enums", [sparrowhawk, hawk, sparrow])
+        test_collection(fid, "enumxs", [Ungulates.horse, Ungulates.deer, Ungulates.bison, Ungulates.deer, Ungulates.horse, Ungulates.deer])
+        test_collection(fid, "chars", collect('a' : 'z'))
+        test_collection(fid, "strings", collect("element $k" for k in 1:9); native = true)
+        test_collection(fid, "symbols", [:a for _ in 1:9])
+    end
+end
 
 @testset "array types" begin
     h5open("$out_dir/array_types.h5", "w") do fid
@@ -153,6 +157,7 @@ end
 
 @testset "serialization types" begin
     h5open("$out_dir/serialization_types.h5", "w") do fid
+        test_collection(fid, "noncrete_types", [MyNoncreteType((; k, )) for k in 1:10])
         test_collection(fid, "serializing_types", [MySerializingType(string(k), [k, 2k, 3k], MyType(4k, 5k)) for k in 1:11])
         test_collection(fid, "json_types", [MyJSONishType(string(k), [k, 2k, 3k], MyType(4k, 5k)) for k in 1:11])
     end
