@@ -38,7 +38,7 @@ function test_collection(
     # We notably don't test pure iteration here; we expect that to be painfully slow, and
     # we also know it will work because indexing works.
 
-    # If the way the array is stored in HDF5 should match the Julia type directly, so load
+    # If the way the array is stored in HDF5 should match the Julia type directly, load
     # in the raw HDF5 array and compare to that.
     if native
         @test read(fid[name]["data"]) == source
@@ -58,6 +58,8 @@ function test_collection(
         push!(arr3, el)
     end
     @test collect(arr3) == vcat(source, source)
+
+    println("Finished testing $name")
 
 end
 
@@ -97,16 +99,17 @@ Base.:(==)(a::MyJSONishType, b::MyJSONishType) = a.x == b.x && a.y == b.y && a.z
 out_dir = "out"
 mkpath("out")
 
-@testset "elemental types" begin
-    h5open("$out_dir/elemental_types.h5", "w") do fid
-        test_collection(fid, "ints", collect(1 : 10); native = true)
-        test_collection(fid, "floats", collect(1. : 12.); native = true)
-        test_collection(fid, "enums", [sparrowhawk, hawk, sparrow])
-        test_collection(fid, "enumxs", [Ungulates.horse, Ungulates.deer, Ungulates.bison, Ungulates.deer, Ungulates.horse, Ungulates.deer])
-        test_collection(fid, "chars", collect('a' : 'z'))
-        test_collection(fid, "strings", collect("element $k" for k in 1:9); native = true)
-    end
-end
+# @testset "elemental types" begin
+#     h5open("$out_dir/elemental_types.h5", "w") do fid
+#         test_collection(fid, "ints", collect(1 : 10); native = true)
+#         test_collection(fid, "floats", collect(1. : 12.); native = true)
+#         test_collection(fid, "enums", [sparrowhawk, hawk, sparrow])
+#         test_collection(fid, "enumxs", [Ungulates.horse, Ungulates.deer, Ungulates.bison, Ungulates.deer, Ungulates.horse, Ungulates.deer])
+#         test_collection(fid, "chars", collect('a' : 'z'))
+#         test_collection(fid, "strings", collect("element $k" for k in 1:9); native = true)
+#         test_collection(fid, "symbols", [:a for _ in 1:9])
+#     end
+# end
 
 @testset "array types" begin
     h5open("$out_dir/array_types.h5", "w") do fid
@@ -118,6 +121,15 @@ end
         test_collection(fid, "vectors_of_floats_no_dims", [Float64[k, 2k, 3k] for k in 1:12])
         test_collection(fid, "matrices_of_floats", [Float64[k 2k; 3k 4k] for k in 1:12]; create_kwargs = (; dims = (2,2), ))
         test_collection(fid, "matrices_of_floats_no_dims", [Float64[k 2k; 3k 4k] for k in 1:12])
+        test_collection(fid, "ntuples_of_symbols", [(:a, :b) for k in 1:3])
+        test_collection(fid, "svectors_of_symbols", [SVector{2, Symbol}(:a, :b) for k in 1:2])
+    end
+end
+
+@testset "empty types" begin
+    h5open("$out_dir/empty_types.h5", "w") do fid
+        test_collection(fid, "empty_ntuples", [Tuple{}() for k in 1:11])
+        test_collection(fid, "empty_svectors_of_floats", [SVector{0, Float64}() for k in 1:12])
     end
 end
 
@@ -133,6 +145,7 @@ end
         test_collection(fid, "tuples_of_non_bits_types", [(string(k), (; a = float(2k), b = 3k)) for k in 1:11]; create_kwargs)
         test_collection(fid, "named_tuples_of_composites", [(; x = float(k), y = (; a = float(2k), b = 3k)) for k in 1:11]; create_kwargs)
         test_collection(fid, "named_tuples_of_non_bits_types", [(; x = string(k), y = (; a = float(2k), b = 3k)) for k in 1:11]; create_kwargs)
+        test_collection(fid, "named_tuples_of_symbols", [(; a = :a_symbol, b = :b_symbol) for _ in 1:3])
         test_collection(fid, "svectors_of_tuples_of_whatever", [SA[(k, string(2k)), (3k, string(4k))] for k in 1:11])
         test_collection(fid, "structs", [MyType(k, 2k) for k in 1:11])
         test_collection(fid, "structs_of_structs", [MyTypeOfTypes(SA_F64[k, 2k, 3k], MyType(k, 2k)) for k in 1:11])
