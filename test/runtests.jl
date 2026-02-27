@@ -59,8 +59,6 @@ function test_collection(
     end
     @test collect(arr3) == vcat(source, source)
 
-    println("Finished testing $name")
-
 end
 
 # Here are some custom things we can work with.
