@@ -42,7 +42,7 @@ function test_collection(
     # We notably don't test pure iteration here; we expect that to be painfully slow, and
     # we also know it will work because indexing works.
 
-    # If the way the array is stored in HDF5 should match the Julia type directly, so load
+    # If the way the array is stored in HDF5 should match the Julia type directly, load
     # in the raw HDF5 array and compare to that.
     if native
         @test read(fid[name]["data"]) == source
@@ -98,10 +98,17 @@ end
 HDF5Vectors.storage_style(::Type{MyJSONishType}; kwargs...) = HDF5Vectors.JSONStorageStyle()
 Base.:(==)(a::MyJSONishType, b::MyJSONishType) = a.x == b.x && a.y == b.y && a.z == b.z
 
+struct MyNoncreteType
+    x::NamedTuple
+end
+
+struct MyEmptyType
+end
+
 out_dir = "out"
 mkpath("out")
 
-@testset "elemental types" begin
+@testset "elemental types (portable = $portable)" for portable in (true, false)
     h5open("$out_dir/elemental_types.h5", "w") do fid
         test_collection(fid, "ints", collect(1 : 10); native = true)
         test_collection(fid, "floats", collect(1. : 12.); native = true)
@@ -109,10 +116,12 @@ mkpath("out")
         test_collection(fid, "enumxs", [Ungulates.horse, Ungulates.deer, Ungulates.bison, Ungulates.deer, Ungulates.horse, Ungulates.deer])
         test_collection(fid, "chars", collect('a' : 'z'))
         test_collection(fid, "strings", collect("element $k" for k in 1:9); native = true)
+        test_collection(fid, "symbols", [:a for _ in 1:9])
+        test_collection(fid, "bools", [isodd(k) for k in 1:9])
     end
 end
 
-@testset "array types" begin
+@testset "array types (portable = $portable)" for portable in (true, false)
     h5open("$out_dir/array_types.h5", "w") do fid
         test_collection(fid, "ntuples_of_ints", [(k, 2k) for k in 1:11])
         test_collection(fid, "svectors_of_floats", [SA_F64[k, 2k, 3k] for k in 1:12])
@@ -122,10 +131,22 @@ end
         test_collection(fid, "vectors_of_floats_no_dims", [Float64[k, 2k, 3k] for k in 1:12])
         test_collection(fid, "matrices_of_floats", [Float64[k 2k; 3k 4k] for k in 1:12]; create_kwargs = (; dims = (2,2), ))
         test_collection(fid, "matrices_of_floats_no_dims", [Float64[k 2k; 3k 4k] for k in 1:12])
+        test_collection(fid, "ntuples_of_symbols", [(:a, :b) for k in 1:3])
+        test_collection(fid, "svectors_of_symbols", [SVector{2, Symbol}(:a, :b) for k in 1:2])
     end
 end
 
-@testset "composite types" for portable in (true, false)
+@testset "empty types (portable = $portable)" for portable in (true, false)
+    create_kwargs = (; portable, )
+    h5open("$out_dir/empty_types.h5", "w") do fid
+        test_collection(fid, "empty_ntuples", [Tuple{}() for k in 1:11]; create_kwargs)
+        test_collection(fid, "empty_svectors_of_floats", [SVector{0, Float64}() for k in 1:12]; create_kwargs)
+        test_collection(fid, "empty_types", [MyEmptyType() for _ in 1:10]; create_kwargs)
+        test_collection(fid, "empty_named_tuples", [(;) for _ in 1:10]; create_kwargs)
+    end
+end
+
+@testset "composite types (portable = $portable)" for portable in (true, false)
     create_kwargs = (; portable, )
     h5open("$out_dir/composite_types" * (portable ? "_portable" : "") * ".h5", "w") do fid
         test_collection(fid, "complex_numbers", [k * (1. + 2im) for k in 1:11]; create_kwargs) # HDF5 will handle this natively, but for portability, we use a composite type.
@@ -137,6 +158,7 @@ end
         test_collection(fid, "tuples_of_non_bits_types", [(string(k), (; a = float(2k), b = 3k)) for k in 1:11]; create_kwargs)
         test_collection(fid, "named_tuples_of_composites", [(; x = float(k), y = (; a = float(2k), b = 3k)) for k in 1:11]; create_kwargs)
         test_collection(fid, "named_tuples_of_non_bits_types", [(; x = string(k), y = (; a = float(2k), b = 3k)) for k in 1:11]; create_kwargs)
+        test_collection(fid, "named_tuples_of_symbols", [(; a = :a_symbol, b = :b_symbol) for _ in 1:3])
         test_collection(fid, "svectors_of_tuples_of_whatever", [SA[(k, string(2k)), (3k, string(4k))] for k in 1:11])
         test_collection(fid, "structs", [MyType(k, 2k) for k in 1:11])
         test_collection(fid, "structs_of_structs", [MyTypeOfTypes(SA_F64[k, 2k, 3k], MyType(k, 2k)) for k in 1:11])
@@ -146,6 +168,7 @@ end
 
 @testset "serialization types" begin
     h5open("$out_dir/serialization_types.h5", "w") do fid
+        test_collection(fid, "nonconcrete_types", [MyNoncreteType((; k, )) for k in 1:10])
         test_collection(fid, "serializing_types", [MySerializingType(string(k), [k, 2k, 3k], MyType(4k, 5k)) for k in 1:11])
         test_collection(fid, "json_types", [MyJSONishType(string(k), [k, 2k, 3k], MyType(4k, 5k)) for k in 1:11])
     end
