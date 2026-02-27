@@ -117,6 +117,7 @@ mkpath("out")
         test_collection(fid, "chars", collect('a' : 'z'))
         test_collection(fid, "strings", collect("element $k" for k in 1:9); native = true)
         test_collection(fid, "symbols", [:a for _ in 1:9])
+        test_collection(fid, "bools", [isodd(k) for k in 1:9])
     end
 end
 

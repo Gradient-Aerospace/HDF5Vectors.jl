@@ -30,7 +30,7 @@ using HDF5
 using StaticArrays: SVector
 
 # See https://juliaio.github.io/HDF5.jl/stable/#Supported-data-types
-const hdf5_scalar_types = Union{UInt8, Int8, UInt16, Int16, UInt32, Int32, UInt64, Int64, Float32, Float64}
+const hdf5_scalar_types = Union{Bool, UInt8, Int8, UInt16, Int16, UInt32, Int32, UInt64, Int64, Float32, Float64}
 
 ##################
 # Storage Styles #
