@@ -54,7 +54,11 @@ Elemental types:
 * Enum
 * Char
 * Bits-type structs
+
+String-like types:
+
 * String
+* Symbol
 
 Array-like types:
 
@@ -72,6 +76,8 @@ Serialized types:
 
 * Vector, Matrix, and Array of non-elemental type or where the dimensions are not known in advance
 * Any type that serializes to a JSON string
+
+Serialization provides a fall-back approach for logging to HDF5 when other logging types don't make sense. For instance, any type whose structure may change from element to element (a nonconcrete type) defaults to using serialization for logging. This is slow, but it works. See "Specifying a Storage Type", below, for more.
 
 ## Iteration
 
