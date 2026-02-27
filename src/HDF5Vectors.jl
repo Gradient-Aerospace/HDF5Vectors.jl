@@ -355,6 +355,7 @@ Optional keyword arguments:
 * `portable`: True to maximize how "portable" the storage is (default true)
 """
 function create_hdf5_vector(style::AbstractHDF5VectorStorageStyle, group, name, el_type; kwargs...)
+    error("There is no implementation of `create_hdf5_vector` for the $(typeof(style)) storage style used for name = $name with el_type = $el_type.")
 end
 
 ##############################
@@ -643,7 +644,7 @@ function create_hdf5_vector(style::CompositeStorageStyle, group, name, el_type::
             create_hdf5_vector(
                 data_group,
                 string(fn),
-                ft;
+                ft; # Since this comes from the _type_, abstract types like NamedTuple may fail here.
                 chunk_length,
                 portable,
             ) for (fn, ft) in zip(fieldnames(T), fieldtypes(T))
