@@ -483,12 +483,12 @@ function load_hdf5_vector(style::EmptyStorageStyle, group, el_type; kwargs...)
 end
 
 Base.length(arr::HDF5VectorOfEmptyTypes) = arr.count # Common with HDF5VectorOfArrayishTypes
-function Base.setindex!(arr::HDF5VectorOfEmptyTypes, el, k)
+function Base.setindex!(arr::HDF5VectorOfEmptyTypes, el, k::Int)
     if k <= 0 || k > arr.count
         error("Index $k was out of bounds: [1, $(arr.count)].")
     end
 end
-function Base.getindex(arr::HDF5VectorOfEmptyTypes{T, DT}, k) where {T, DT}
+function Base.getindex(arr::HDF5VectorOfEmptyTypes{T, DT}, k::Int) where {T, DT}
     if k <= 0 || k > arr.count
         error("Index $k was out of bounds: [1, $(arr.count)].")
     end
