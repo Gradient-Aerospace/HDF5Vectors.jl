@@ -26,6 +26,10 @@ function test_collection(
     @test size(arr) == (length(source),)
     @test arr[1] == source[1] # Check indexing.
     @test arr[end] == source[end] # Check end (lastindex).
+    @test arr[:] == source
+    idxs = 1:min(3, length(source))
+    @test arr[idxs] == source[idxs]
+    @test arr[collect(idxs)] == source[collect(idxs)]
     @test collect(arr) == source
     @test eltype(arr) == T
     # @show collect(arr)
