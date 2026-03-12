@@ -53,7 +53,6 @@ function test_collection(
     @test collect(arr2) == source
 
     # Now try loading a the array.
-    # arr3 = load_hdf5_vector(fid[name], T; create_kwargs...)
     arr3 = load_hdf5_vector(fid[name])
     @test collect(arr3) == source
 
