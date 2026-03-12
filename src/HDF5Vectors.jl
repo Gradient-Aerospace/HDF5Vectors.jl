@@ -469,10 +469,7 @@ function copy_to_hdf5_vector(style::ElementalStorageStyle, group, name, collecti
     array = [deconstruct(type, el) for el in collection]
 
     # Now that we have the array, assign it to the HDF5 file.
-    # this_group["data"] .= array
-    for k in eachindex(collection)
-        this_group["data"][k] = array[k] # TODO: This is unnecessarily slow.
-    end
+    this_group["data"][:] = array
 
     # Now we have a normal HDF5 vector.
     return HDF5VectorOfElementalTypes{el_type, datatype}(dataset, datatype, n)
@@ -627,20 +624,33 @@ function create_hdf5_vector(style::ArrayStorageStyle, group, name, arrayish_el_t
 end
 
 function copy_to_hdf5_vector(style::ArrayStorageStyle, group, name, collection; chunk_length, portable, kwargs...)
-    arrayish_el_type = eltype(collection)
-    el_dims = style.dims # TODO: Where would this come from for an array?
-    datatype = style.datatype
+
+    # Set up the group and metadata just like for create_hdf5_vector.
+    arrayish_el_type = eltype(collection) # like Vector{Int64} or SVector{3, Float64}
+    el_dims = style.dims
+    datatype = style.datatype # Like Int64 or Float64
     this_group = HDF5.create_group(group, name)
     store_metadata(style, this_group, arrayish_el_type; dims = el_dims, portable)
+
+    # Set up the dataset with the current size and the ability to grow.
     n = length(collection)
+    vector_dims = (el_dims..., n)
+    max_dims = (el_dims..., -1,) # Last dimension can grow forever.
+    dataspace = HDF5.dataspace(vector_dims, max_dims)
+    dataset = create_dataset(this_group, "data", datatype, dataspace; chunk = (el_dims..., chunk_length,))
+
+    # Make a big array with the deconstructed values from the collection.
     type = HDF5VectorOfArrayishTypes{arrayish_el_type, Tuple{el_dims...,}, datatype}
     big_array = zeros(style.datatype, (el_dims..., n))
     for k in eachindex(collection)
         big_array[(Colon() for _ in el_dims)..., k] .= deconstruct(type, collection[k])
     end
-    this_group["data"] = big_array
-    dataset = this_group["data"]
+
+    # Add the data.
+    this_group["data"][(Colon() for _ in el_dims)..., :] = big_array
+
     return type(dataset, datatype, n)
+
 end
 
 function load_hdf5_vector(style::ArrayStorageStyle, group, el_type; kwargs...)
