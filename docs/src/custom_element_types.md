@@ -10,7 +10,7 @@ Most types can be stored reasonably well as HDF5 vectors without having to speci
 * [`construct`](@ref)
 * [`deconstruct`](@ref)
 
-Here's a complete example of a custom type for recording student grades, where the grade itself is stored as a string, but we really that's just going to be A, B, C, D, or F. Here is the native type:
+Here's a complete example of a custom type for recording student grades, where the grade itself is stored as a string, where that string is going to be A, B, C, D, or F. Here is the native type:
 
 ```
 struct Grade
@@ -22,16 +22,16 @@ Here's what's necessary to store this as the "elemental" style, where the label 
 
 ```
 using HDF5Vectors
-import HDF5Vectors: storage_style, construct, deconstruct
+import HDF5Vectors: storage_style, construct, deconstruct, ElementalStorageStyle, HDF5VectorOfElementalTypes
 
-# Tell it we want this stored using the "elemental" style, with Chars.
-storage_style(::Type{Grade}; kwargs...) = HDF5Vectors.ElementalStorageStyle(UInt8)
+# Tell it we want this stored using the "elemental" style, with UInt8 as the element type.
+storage_style(::Type{Grade}; kwargs...) = ElementalStorageStyle(UInt8)
 
-# To store a Grade, pull the first (and only) char from the label.
-deconstruct(::Type{UInt8}, el) = UInt8(only(el.label))
+# To store a Grade, pull the first (and only) char from the label string and convert to UInt8.
+deconstruct(::Type{HDF5VectorOfElementalTypes{Grade, UInt8}}, el::Grade) = UInt8(only(el.label))
 
 # To rebuild a Grade from what was stored, make a string from the char.
-construct(::Type{Grade}, el) = Grade(string(Char(el)))
+construct(::Type{HDF5VectorOfElementalTypes{Grade, UInt8}}, el::UInt8) = Grade(string(Char(el)))
 ```
 
 Now let's give that a try:
@@ -51,7 +51,7 @@ h5open("custom_element_type.h5", "w") do fid
     push!(arr, Grade("F"))
 
     # Show how that's stored in the file itself:
-    @show read(fid["grades"])
+    @show read(fid["grades"]["data"])
 
     # Show that in fact Grades are rebuilt from that data.
     @show collect(arr)

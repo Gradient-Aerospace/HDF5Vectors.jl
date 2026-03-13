@@ -6,7 +6,9 @@ CurrentModule = HDF5Vectors
 
 To create a new type of HDF5 vector, you will need to define a new storage style type (`<:AbstractHDF5VectorStorageStyle`), create your type (`<:AbstractHDF5Vector`), and then implement following HDF5Vectors functions:
 
-* [`create_hdf5_vector(style::AbstractHDF5VectorStorageStyle, group, name, el_type; kwargs...)`](@ref)
+* [`create_hdf5_vector(style::MyNewHDF5VectorStorageStyle, group, name, el_type; kwargs...)`](@ref)
+* [`copy_to_hdf5_vector(style::MyNewHDF5VectorStorageStyle, group, name, collection; kwargs...)`](@ref)
+* [`load_hdf5_vector(style::MyNewHDF5VectorStorageStyle, group_or_dataset, el_type; kwargs...)`](@ref)
 
 as well as the AbstractArray interface:
 
@@ -26,5 +28,10 @@ These have definitions for `AbstractHDF5Vector` and likely don't need custom imp
 * `Base.map(f, v)`
 * `Base.mapreduce(f, op, v; kwargs...)`
 * `Base.iterate(v)` and `Base.iterate(v, state)`
+
+If your type uses `construct` and `deconstruct`, you'll need methods for those:
+
+* `construct(::Type{MyHDF5Vector}, el)`
+* `deconstruct(::Type{MyHDF5Vector}, el)`
 
 For an example of implementing a new type of storage, see the source for `HDF5VectorOfCompositeTypes`. It is fairly short, despite that it is used for the storage of all composite types in this package.
