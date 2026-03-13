@@ -13,7 +13,7 @@ It generally can store vectors of elements with fixed sizes, where that element 
   always the same
 * String
 
-Futher, it can serialize types to bytes or strings and store those in the HDF5 file. This
+Further, it can serialize types to bytes or strings and store those in the HDF5 file. This
 allows it to store:
 
 * Any type that serializes
@@ -189,19 +189,20 @@ end
 """
     construct(type::Type, el)
 
-Given the `el` "element", as stored in the HDF5 file, the constructs the appropriate type
-for an HDF5Vector of type `type`. What the element actually is depends on the storage style
-associated with the type.
+Create the appropriate Julia value from the raw element `el` retrieved from the
+HDF5 dataset. The behaviour is determined by the storage style associated with `type`.
+This generic definition is a placeholder; concrete storage implementations overload
+`construct` for their particular container types and element representations.
 """
 function construct end
 
 """
     deconstruct(type::Type, el)
 
-TODO: Update.
-
-Decomposes the given `el` element into the datatype used for storage in the HDF5 file. This
-depends on the storage style associated with the type of the element.
+Convert the Julia value `el` into the representation stored in the HDF5 file. The
+storage style associated with `type` chooses how the conversion is performed. Like
+`construct`, this generic definition is a no-op; storage backends provide concrete
+methods.
 """
 function deconstruct end
 
@@ -361,7 +362,13 @@ function create_hdf5_vector(
 end
 
 """
-TODO
+    load_hdf5_vector(group; kwargs...)
+
+Reconstruct an HDF5 vector from a group created by `create_hdf5_vector`.  The
+metadata stored in the group (type, dimensions, portability) is used to determine
+which specific vector implementation to instantiate.  This form takes only the
+`group` and pulls the element type from the metadata; the optional keyword
+arguments are forwarded to `storage_style` and to the underlying loader.
 """
 function load_hdf5_vector(group; kwargs...)
     metadata_group = group["metadata"]
@@ -373,7 +380,13 @@ function load_hdf5_vector(group; kwargs...)
 end
 
 """
-TODO
+    load_hdf5_vector(group_or_dataset, el_type; kwargs...)
+
+Reconstruct an HDF5 vector when the caller already knows the element type.
+This overload is primarily used when loading a dataset directly (rather than the
+parent group) or when the metadata does not reside in the expectation of the
+vector type.  The element type is passed explicitly and used to select the
+storage style; the remainder of the arguments is forwarded.
 """
 function load_hdf5_vector(group_or_dataset, el_type; kwargs...)
     return load_hdf5_vector(storage_style(el_type; kwargs...), group_or_dataset, el_type; kwargs...)
@@ -513,7 +526,7 @@ end
 # We may need to store "empty" types that HDF5 has no way of representing, like an empty
 # tuple. To do this, we store the metadata like normal (which includes the type we'll need
 # to reconstruct whatever "empty" type this is), but we store no data. Instead, we store a
-# length -- how many empties have been "written" to the HDF5 file. When acessing this data,
+# length -- how many empties have been "written" to the HDF5 file. When accessing this data,
 # we construct the appropriate empty type as long as the requested index is in range.
 
 struct EmptyStorageStyle{HT} <: AbstractHDF5VectorStorageStyle
@@ -641,7 +654,7 @@ function copy_to_hdf5_vector(style::ArrayStorageStyle, group, name, collection; 
 
     # Make a big array with the deconstructed values from the collection.
     type = HDF5VectorOfArrayishTypes{arrayish_el_type, Tuple{el_dims...,}, datatype}
-    big_array = zeros(style.datatype, (el_dims..., n))
+    big_array = Array{style.datatype}(undef, (el_dims..., n))
     for k in eachindex(collection)
         big_array[(Colon() for _ in el_dims)..., k] .= deconstruct(type, collection[k])
     end
@@ -832,7 +845,7 @@ Base.length(arr::HDF5VectorOfCompositeTypes) = arr.count
 
 function Base.setindex!(arr::HDF5VectorOfCompositeTypes{T}, el, k) where {T}
     for (sub_array, fn) in zip(arr.arrays, fieldnames(T))
-        setindex!(sub_array, getfield(el, fn), k) # TODO: Should this be getproperty?
+        setindex!(sub_array, getproperty(el, fn), k)
     end
     return el
 end
@@ -863,7 +876,7 @@ construct(::Type{HDF5VectorOfCompositeTypes{T}}, el) where {T <: NamedTuple} = T
 
 # Similarly, to deconstruct, get a tuple of the values.
 function deconstruct(::Type{HDF5VectorOfCompositeTypes{T}}, el) where {T}
-    return Tuple(getfield(el, fn) for fn in fieldnames(T)) # TODO: Should this be getproperty?
+    return Tuple(getproperty(el, fn) for fn in fieldnames(T))
 end
 
 ######################
