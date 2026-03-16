@@ -42,6 +42,9 @@ function test_collection(
     # We notably don't test pure iteration here; we expect that to be painfully slow, and
     # we also know it will work because indexing works.
 
+    # Buffered writes become externally visible once we trim or close the vector.
+    trim_hdf5_vector!(arr)
+
     # If the way the array is stored in HDF5 should match the Julia type directly, load
     # in the raw HDF5 array and compare to that.
     if native

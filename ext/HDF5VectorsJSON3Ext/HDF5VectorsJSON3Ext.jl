@@ -44,5 +44,9 @@ function Base.collect(arr::HDF5VectorWithJSONStorage{T}) where {T}
     data = collect(arr.storage)
     return T[JSON3.read(el, T) for el in data]
 end
+function HDF5Vectors.trim_hdf5_vector!(arr::HDF5VectorWithJSONStorage)
+    HDF5Vectors.trim_hdf5_vector!(arr.storage)
+    return arr
+end
 
 end

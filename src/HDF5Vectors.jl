@@ -24,7 +24,7 @@ slow; for far better speed, iterate on `iterable(arr)`.
 """
 module HDF5Vectors
 
-export AbstractHDF5Vector, create_hdf5_vector, load_hdf5_vector, copy_to_hdf5_vector, iterable
+export AbstractHDF5Vector, create_hdf5_vector, load_hdf5_vector, copy_to_hdf5_vector, iterable, trim_hdf5_vector!
 
 using HDF5
 using StaticArrays: SVector
@@ -412,44 +412,121 @@ mutable struct HDF5VectorOfElementalTypes{T, DT} <: AbstractHDF5Vector{T}
     dataset::HDF5.Dataset
     datatype::Type{DT}
     count::Int64
+    capacity::Int64
+    chunk_length::Int64
+    flushed_count::Int64
+    buffer::Vector{DT}
+end
+
+default_chunk_length() = Int64(1000)
+normalized_chunk_length(chunk_length) = max(Int64(chunk_length), Int64(1))
+
+function next_capacity(capacity, chunk_length, requested_count)
+    requested_count <= capacity && return capacity
+    return max(requested_count, capacity + normalized_chunk_length(chunk_length))
+end
+
+function trim_hdf5_vector!(::AbstractHDF5Vector)
+    return nothing
+end
+
+buffer_count(arr) = arr.count - arr.flushed_count
+
+function flush_buffer!(arr::HDF5VectorOfElementalTypes)
+    n = buffer_count(arr)
+    n == 0 && return arr
+    start = arr.flushed_count + 1
+    stop = arr.count
+    arr.dataset[start:stop] = arr.buffer[1:n]
+    arr.flushed_count = arr.count
+    return arr
 end
 
 function create_hdf5_vector(style::ElementalStorageStyle, group, name, el_type; chunk_length, portable, kwargs...)
     this_group = HDF5.create_group(group, name)
     store_metadata(style, this_group, el_type; portable)
     datatype = style.datatype
-    vector_dims = (0,) # Last dimension is 0 until we start writing to it.
+    chunk_length = normalized_chunk_length(chunk_length)
+    vector_dims = (chunk_length,) # Preallocate one chunk to avoid resizing on every push!.
     max_dims = (-1,) # Last dimension can grow forever.
     dataspace = HDF5.dataspace(vector_dims, max_dims)
     dataset = create_dataset(this_group, "data", datatype, dataspace; chunk = (chunk_length,))
-    return HDF5VectorOfElementalTypes{el_type, datatype}(dataset, datatype, 0)
+    return HDF5VectorOfElementalTypes{el_type, datatype}(
+        dataset,
+        datatype,
+        0,
+        chunk_length,
+        chunk_length,
+        0,
+        Vector{datatype}(undef, chunk_length),
+    )
 end
 
 function load_hdf5_vector(style::ElementalStorageStyle, group, el_type; kwargs...)
     dataset = group["data"]
     datatype = style.datatype # eltype(dataset)
     count = size(dataset)[end]
-    return HDF5VectorOfElementalTypes{el_type, datatype}(dataset, datatype, count)
+    capacity = count
+    chunk_length = min(max(capacity, Int64(1)), default_chunk_length())
+    return HDF5VectorOfElementalTypes{el_type, datatype}(
+        dataset,
+        datatype,
+        count,
+        capacity,
+        chunk_length,
+        count,
+        Vector{datatype}(undef, chunk_length),
+    )
 end
 
 Base.length(arr::HDF5VectorOfElementalTypes) = arr.count # Common with HDF5VectorOfArrayishTypes
 function Base.setindex!(arr::HDF5VectorOfElementalTypes{T, DT}, el, k) where {T, DT}
-    arr.dataset[k] = deconstruct(arr, el)
+    stored_el = deconstruct(arr, el)
+    if k <= arr.flushed_count
+        arr.dataset[k] = stored_el
+    else
+        arr.buffer[k - arr.flushed_count] = stored_el
+    end
 end
 function Base.getindex(arr::HDF5VectorOfElementalTypes{T, DT}, k::Int) where {T, DT}
-    # construct(T, read(arr.dataset, DT, k))
-    construct(arr, read(arr.dataset, DT, k))
+    if k <= arr.flushed_count
+        return construct(arr, read(arr.dataset, DT, k))
+    end
+    return construct(arr, arr.buffer[k - arr.flushed_count])
 end
 function Base.collect(arr::HDF5VectorOfElementalTypes{T, DT}) where {T, DT}
-    data = read(arr.dataset, DT, 1:arr.count)
-    # return [construct(T, el) for el in data]
-    return [construct(arr, el) for el in data]
+    collected = Vector{T}(undef, arr.count)
+    if arr.flushed_count > 0
+        data = read(arr.dataset, DT, 1:arr.flushed_count)
+        for k in 1:arr.flushed_count
+            collected[k] = construct(arr, data[k])
+        end
+    end
+    for k in arr.flushed_count+1:arr.count
+        collected[k] = construct(arr, arr.buffer[k - arr.flushed_count])
+    end
+    return collected
 end
 
 function Base.push!(arr::HDF5VectorOfElementalTypes, el)
     arr.count += 1
-    HDF5.set_extent_dims(arr.dataset, (arr.count,))
-    arr[arr.count] = el
+    if arr.count > arr.capacity
+        arr.capacity = next_capacity(arr.capacity, arr.chunk_length, arr.count)
+        HDF5.set_extent_dims(arr.dataset, (arr.capacity,))
+    end
+    arr.buffer[buffer_count(arr)] = deconstruct(arr, el)
+    if buffer_count(arr) == arr.chunk_length
+        flush_buffer!(arr)
+    end
+    return arr
+end
+
+function trim_hdf5_vector!(arr::HDF5VectorOfElementalTypes)
+    flush_buffer!(arr)
+    if arr.capacity != arr.count
+        HDF5.set_extent_dims(arr.dataset, (arr.count,))
+        arr.capacity = arr.count
+    end
     return arr
 end
 
@@ -546,6 +623,29 @@ mutable struct HDF5VectorOfArrayishTypes{T, D, DT} <: AbstractHDF5Vector{T}
     dataset::HDF5.Dataset
     datatype::Type{DT}
     count::Int64
+    capacity::Int64
+    chunk_length::Int64
+    flushed_count::Int64
+    buffer::Vector{T}
+end
+
+function copy_buffer_to_array!(arr::HDF5VectorOfArrayishTypes{T, D, DT}, staged, n) where {T, D, DT}
+    for k in 1:n
+        staged[colons(D)..., k] = deconstruct(arr, arr.buffer[k])
+    end
+    return staged
+end
+
+function flush_buffer!(arr::HDF5VectorOfArrayishTypes{T, D, DT}) where {T, D, DT}
+    n = buffer_count(arr)
+    n == 0 && return arr
+    staged = Array{DT}(undef, fieldtypes(D)..., n)
+    copy_buffer_to_array!(arr, staged, n)
+    start = arr.flushed_count + 1
+    stop = arr.count
+    arr.dataset[colons(D)..., start:stop] = staged
+    arr.flushed_count = arr.count
+    return arr
 end
 
 function create_hdf5_vector(style::ArrayStorageStyle, group, name, arrayish_el_type; chunk_length, portable, kwargs...)
@@ -553,11 +653,20 @@ function create_hdf5_vector(style::ArrayStorageStyle, group, name, arrayish_el_t
     datatype = style.datatype
     this_group = HDF5.create_group(group, name)
     store_metadata(style, this_group, arrayish_el_type; dims = el_dims, portable)
-    vector_dims = (el_dims..., 0) # Last dimension is 0 until we start writing to it.
+    chunk_length = normalized_chunk_length(chunk_length)
+    vector_dims = (el_dims..., chunk_length) # Preallocate one chunk to avoid resizing on every push!.
     max_dims = (el_dims..., -1,) # Last dimension can grow forever.
     dataspace = HDF5.dataspace(vector_dims, max_dims)
     dataset = create_dataset(this_group, "data", datatype, dataspace; chunk = (el_dims..., chunk_length,))
-    return HDF5VectorOfArrayishTypes{arrayish_el_type, Tuple{el_dims...,}, datatype}(dataset, datatype, 0)
+    return HDF5VectorOfArrayishTypes{arrayish_el_type, Tuple{el_dims...,}, datatype}(
+        dataset,
+        datatype,
+        0,
+        chunk_length,
+        chunk_length,
+        0,
+        Vector{arrayish_el_type}(undef, chunk_length),
+    )
 end
 
 function load_hdf5_vector(style::ArrayStorageStyle, group, el_type; kwargs...)
@@ -565,7 +674,17 @@ function load_hdf5_vector(style::ArrayStorageStyle, group, el_type; kwargs...)
     datatype = style.datatype
     el_dims = style.dims # size(dataset)[1:end-1]
     count = size(dataset)[end]
-    return HDF5VectorOfArrayishTypes{el_type, Tuple{el_dims...,}, datatype}(dataset, datatype, count)
+    capacity = count
+    chunk_length = min(max(capacity, Int64(1)), default_chunk_length())
+    return HDF5VectorOfArrayishTypes{el_type, Tuple{el_dims...,}, datatype}(
+        dataset,
+        datatype,
+        count,
+        capacity,
+        chunk_length,
+        count,
+        Vector{el_type}(undef, chunk_length),
+    )
 end
 
 @inline colons(D) = Tuple(Colon() for _ in fieldtypes(D))
@@ -573,11 +692,17 @@ end
 Base.length(arr::HDF5VectorOfArrayishTypes) = arr.count
 
 function Base.setindex!(arr::HDF5VectorOfArrayishTypes{T, D, DT}, el, k) where {T, D, DT}
-    arr.dataset[colons(D)..., k] = deconstruct(arr, el)
+    if k <= arr.flushed_count
+        arr.dataset[colons(D)..., k] = deconstruct(arr, el)
+    else
+        arr.buffer[k - arr.flushed_count] = el
+    end
 end
 function Base.getindex(arr::HDF5VectorOfArrayishTypes{T, D, DT}, k::Int) where {T, D, DT}
-    # construct(T, read(arr.dataset, DT, colons(D)..., k))
-    construct(arr, read(arr.dataset, DT, colons(D)..., k))
+    if k <= arr.flushed_count
+        return construct(arr, read(arr.dataset, DT, colons(D)..., k))
+    end
+    return arr.buffer[k - arr.flushed_count]
 end
 function copy_each_frame_and_construct!(arr, collected::Vector{T}, data::Array{ET, N}, n) where {T, ET, N}
     for k in 1:n
@@ -587,16 +712,36 @@ function copy_each_frame_and_construct!(arr, collected::Vector{T}, data::Array{E
     end
 end
 function Base.collect(arr::HDF5VectorOfArrayishTypes{T, D, DT}) where {T, D, DT}
-    data = read(arr.dataset, DT, colons(D)..., 1:arr.count)
     collected = Vector{T}(undef, arr.count)
-    copy_each_frame_and_construct!(arr, collected, data, arr.count)
+    if arr.flushed_count > 0
+        data = read(arr.dataset, DT, colons(D)..., 1:arr.flushed_count)
+        copy_each_frame_and_construct!(arr, collected, data, arr.flushed_count)
+    end
+    for k in arr.flushed_count+1:arr.count
+        collected[k] = arr.buffer[k - arr.flushed_count]
+    end
     return collected
 end
 
 function Base.push!(arr::HDF5VectorOfArrayishTypes{T, D, DT}, el) where {T, D, DT}
     arr.count += 1
-    HDF5.set_extent_dims(arr.dataset, (fieldtypes(D)..., arr.count,))
-    arr[arr.count] = el
+    if arr.count > arr.capacity
+        arr.capacity = next_capacity(arr.capacity, arr.chunk_length, arr.count)
+        HDF5.set_extent_dims(arr.dataset, (fieldtypes(D)..., arr.capacity,))
+    end
+    arr.buffer[buffer_count(arr)] = el
+    if buffer_count(arr) == arr.chunk_length
+        flush_buffer!(arr)
+    end
+    return arr
+end
+
+function trim_hdf5_vector!(arr::HDF5VectorOfArrayishTypes{T, D, DT}) where {T, D, DT}
+    flush_buffer!(arr)
+    if arr.capacity != arr.count
+        HDF5.set_extent_dims(arr.dataset, (fieldtypes(D)..., arr.count,))
+        arr.capacity = arr.count
+    end
     return arr
 end
 
@@ -646,6 +791,11 @@ function Base.push!(arr::HDF5VectorWithByteArrayStorage, el)
     push!(arr.stops, stop)
     return arr
 end
+function trim_hdf5_vector!(arr::HDF5VectorWithByteArrayStorage)
+    trim_hdf5_vector!(arr.storage)
+    trim_hdf5_vector!(arr.stops)
+    return arr
+end
 function Base.setindex!(arr::HDF5VectorWithByteArrayStorage, el, k)
     # To implement this, we'd need to completely redo the byte array and all of the stops.
     # Let's just not support this for serialized types.
@@ -663,7 +813,7 @@ function Base.getindex(arr::HDF5VectorWithByteArrayStorage{T}, k::Int) where {T}
     stop = arr.stops[k]
     start = k == 1 ? 1 : arr.stops[k-1] + 1
     range = Int64(start) : Int64(stop)
-    return Serialization.deserialize(IOBuffer(read(arr.storage.dataset, UInt8, range)))
+    return Serialization.deserialize(IOBuffer(UInt8[arr.storage[i] for i in range]))
 end
 function Base.collect(arr::HDF5VectorWithByteArrayStorage{T}) where {T}
     data = collect(arr.storage)
@@ -730,6 +880,10 @@ function Base.push!(arr::HDF5VectorOfCompositeTypes{T}, el) where {T}
         push!(sub_array, value)
     end
     arr.count += 1
+    return arr
+end
+function trim_hdf5_vector!(arr::HDF5VectorOfCompositeTypes)
+    foreach(trim_hdf5_vector!, arr.arrays)
     return arr
 end
 
