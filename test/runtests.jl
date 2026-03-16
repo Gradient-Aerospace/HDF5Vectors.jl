@@ -52,10 +52,14 @@ function test_collection(
     arr2 = copy_to_hdf5_vector(fid["/"], name * "-copy", source; chunk_length, create_kwargs...)
     @test collect(arr2) == source
 
-    # Now try loading a the array.
-    # arr3 = load_hdf5_vector(fid[name], T; create_kwargs...)
+    # Now try loading the array using metadata and also via the explicit-el_type overload.
     arr3 = load_hdf5_vector(fid[name])
     @test collect(arr3) == source
+
+    # Load again, this time specifying the element type explicitly. We'll need to forward
+    # the same kwargs that we used when creating the vector.
+    arr4 = load_hdf5_vector(fid[name], T; create_kwargs...)
+    @test collect(arr4) == source
 
     # Now test that we can continue writing to the HDF5 vector.
     for el in source
@@ -147,8 +151,10 @@ end
 end
 
 @testset "composite types (portable = $portable)" for portable in (true, false)
+
     create_kwargs = (; portable, )
     h5open("$out_dir/composite_types" * (portable ? "_portable" : "") * ".h5", "w") do fid
+
         test_collection(fid, "complex_numbers", [k * (1. + 2im) for k in 1:11]; create_kwargs) # HDF5 will handle this natively, but for portability, we use a composite type.
         test_collection(fid, "rational_numbers", [k // 100 for k in 1:11]; create_kwargs)
         test_collection(fid, "tuples_of_reals", [(float(k), 2k) for k in 1:11]; create_kwargs) # Different types make this a composite type.
@@ -163,7 +169,13 @@ end
         test_collection(fid, "structs", [MyType(k, 2k) for k in 1:11])
         test_collection(fid, "structs_of_structs", [MyTypeOfTypes(SA_F64[k, 2k, 3k], MyType(k, 2k)) for k in 1:11])
         test_collection(fid, "non_bits_structs", [MyNonBitsType(string(k), [k, 2k, 3k]) for k in 1:11])
+
+        # composite representation of SMatrix/SArray when element type is non-elemental
+        test_collection(fid, "smatrix_of_mytype", [SMatrix{2, 2, MyType, 4}((MyType(k,k), MyType(k+1,k+1), MyType(k+2,k+2), MyType(k+3,k+3))) for k in 1:5]; create_kwargs)
+        test_collection(fid, "sarray_of_mytype", [SArray{Tuple{2, 2}, MyType}((MyType(k,k), MyType(k+1,k+1), MyType(k+2,k+2), MyType(k+3,k+3))) for k in 1:5]; create_kwargs)
+
     end
+
 end
 
 @testset "serialization types" begin
@@ -171,5 +183,15 @@ end
         test_collection(fid, "nonconcrete_types", [MyNoncreteType((; k, )) for k in 1:10])
         test_collection(fid, "serializing_types", [MySerializingType(string(k), [k, 2k, 3k], MyType(4k, 5k)) for k in 1:11])
         test_collection(fid, "json_types", [MyJSONishType(string(k), [k, 2k, 3k], MyType(4k, 5k)) for k in 1:11])
+    end
+end
+
+# verify error behaviour for unsupported operations
+@testset "error conditions" begin
+    h5open("$out_dir/error_conditions.h5", "w") do fid
+        # ByteArray style does not support setindex!
+        arr = create_hdf5_vector(fid["/"], "bytes", MySerializingType; portable=true)
+        push!(arr, MySerializingType("x", [1.], MyType(1,2)))
+        @test_throws ErrorException setindex!(arr, MySerializingType("y",[2.],MyType(3,4)), 1)
     end
 end

@@ -1,9 +1,18 @@
+# Build documentation:
+#
+#   julia --project=docs docs/make.jl
+#
+# View it:
+#
+#   julia -e "using LiveServer; serve(dir=\"docs/build/\");"
+#
+
 # push!(LOAD_PATH,"../src/") # Do I need this?
 
 using Documenter, HDF5Vectors
 
 makedocs(;
-    sitename = "My Documentation for HDF5Vectors",
+    sitename = "HDF5Vectors",
     remotes = nothing,
     pages = [
         "Home" => "index.md",

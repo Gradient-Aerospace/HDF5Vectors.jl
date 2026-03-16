@@ -4,7 +4,7 @@
 CurrentModule = HDF5Vectors
 ```
 
-This package provides a mechanism for storing vectors in HDF5 files rather than in RAM. Those vectors adhere to the AbstractVector syntax and can grow over time via `push!`. This can be particularly useful for long-running calculations, where the data that gets produced is simply too much to fit in RAM.
+This package provides a mechanism for storing vectors in HDF5 files rather than in RAM. Those vectors adhere to the AbstractVector syntax and can grow over time via `push!`. This can be particularly useful for long-running calculations, where the data that gets produced is simply too much to fit in RAM. It's also useful as a way to copy an array from Julia into an HDF5 file in a "portable" way that can be accessed outside of Julia, as well as a way to load those same vectors back into Julia.
 
 ## Example
 
@@ -41,11 +41,18 @@ fid = HDF5.h5open("storage.h5")
 arr = load_hdf5_vector(fid["/x"], Float64)
 ```
 
-This example could be repeated for many different types in Julia.
+Further, you can move an existing array into HDF5 like so:
+
+```
+fid = HDF5.h5open("storage.h5")
+my_hdf5_vector = copy_to_hdf5_vector(fid["/"], "some_name", my_regular_vector)
+```
+
+Note that writing into an HDF5 file element-by-element is much slower than keeping arrays in RAM, as is reading data back element-by-element, so HDF5Vectors should be used judiciously.
 
 ## Supported Types
 
-This works for storing most types, including:
+This works for storing many common types, including:
 
 Elemental types:
 
