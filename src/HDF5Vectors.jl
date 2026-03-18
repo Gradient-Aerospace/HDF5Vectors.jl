@@ -1034,7 +1034,6 @@ deconstruct(::Type{<:HDF5VectorOfArrayishTypes}, el::SMatrix) = el
 # When these are composite, we treat them like normal composite types. They have a `data`
 # field, and we log that one field, letting the type of the `data` field break down like
 # any other composite type.
-# TODO: Test these.
 construct(::Type{HDF5VectorOfCompositeTypes{T}}, el) where {T <: SMatrix} = T(el...)
 deconstruct(::Type{HDF5VectorOfCompositeTypes{T}}, el) where {T <: SMatrix} = (el.data,)
 
@@ -1060,7 +1059,6 @@ deconstruct(::Type{<:HDF5VectorOfArrayishTypes}, el::SArray) = el
 # When these are composite, we treat them like normal composite types. They have a `data`
 # field, and we log that one field, letting the type of the `data` field break down like
 # any other composite type.
-# TODO: Test these.
 construct(::Type{HDF5VectorOfCompositeTypes{T}}, el) where {T <: SArray} = T(el...)
 deconstruct(::Type{HDF5VectorOfCompositeTypes{T}}, el) where {T <: SArray} = (el.data,)
 
