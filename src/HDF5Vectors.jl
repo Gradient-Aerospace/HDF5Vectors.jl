@@ -563,7 +563,7 @@ function copy_to_hdf5_vector(style::EmptyStorageStyle, group, name, collection; 
     max_dims = (1,)
     dataspace = HDF5.dataspace(vector_dims, max_dims)
     dataset = create_dataset(this_group, "data", datatype, dataspace)
-    dataset[1] = 0
+    dataset[1] = n
     return HDF5VectorOfEmptyTypes{el_type, datatype}(dataset, datatype, n)
 end
 
