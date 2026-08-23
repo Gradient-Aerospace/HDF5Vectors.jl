@@ -406,8 +406,14 @@ end
 # The generic implementation of this just creates the vector and then fills it in one by
 # one. This is slow, but it works, and some things like serialization can't really be made
 # faster anyway, so it's a useful default method.
-function copy_to_hdf5_vector(style::AbstractHDF5VectorStorageStyle, group, name, collection; kwargs...)
-    v = create_hdf5_vector(group, name, eltype(collection); kwargs...)
+function copy_to_hdf5_vector(
+    style::AbstractHDF5VectorStorageStyle,
+    group,
+    name,
+    collection;
+    kwargs...,
+)
+    v = create_hdf5_vector(style, group, name, eltype(collection); kwargs...)
     for el in collection
         push!(v, el)
     end
@@ -807,24 +813,37 @@ function create_hdf5_vector(style::CompositeStorageStyle, group, name, el_type::
     )
 end
 
-function copy_to_hdf5_vector(style::CompositeStorageStyle, group, name, collection; chunk_length, portable, kwargs...)
+function copy_to_hdf5_vector(
+    style::CompositeStorageStyle,
+    group,
+    name,
+    collection;
+    chunk_length,
+    portable,
+    kwargs...,
+)
+
     el_type = eltype(collection)
     n = length(collection)
     this_group = create_group(group, string(name))
     store_metadata(style, this_group, el_type; portable)
     data_group = create_group(this_group, "data")
+
+    # Use each declared field type for its collection. In particular, an abstract field's
+    # runtime values must not narrow the storage style away from the one used when loading.
     return HDF5VectorOfCompositeTypes{el_type}(
         [
             copy_to_hdf5_vector(
                 data_group,
                 string(fn),
-                [getproperty(el, fn) for el in collection];
+                field_type[getproperty(el, fn) for el in collection];
                 chunk_length,
                 portable,
-            ) for fn in fieldnames(el_type)
+            ) for (fn, field_type) in zip(fieldnames(el_type), fieldtypes(el_type))
         ],
         n,
     )
+
 end
 
 function load_hdf5_vector(style::CompositeStorageStyle, group_or_dataset, el_type; kwargs...)
