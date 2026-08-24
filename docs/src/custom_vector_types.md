@@ -20,10 +20,11 @@ These style-taking methods are implementation hooks. Application code should cal
 The vector type must also implement the following parts of the AbstractArray interface:
 
 * `Base.length(v)`
-* `Base.setindex!(v, el, k)`
 * `Base.push!(v, el)`
 * `Base.getindex(v, k)`
 * `Base.collect(v)`
+
+`Base.setindex!(v, el, k)` is optional because some storage formats are append-only. If a vector type implements safe in-place replacement and may be used as a field of composite storage, also define `HDF5Vectors.supports_setindex(::MyHDF5VectorType) = true`.
 
 These have definitions for `AbstractHDF5Vector` and likely don't need custom implementations:
 

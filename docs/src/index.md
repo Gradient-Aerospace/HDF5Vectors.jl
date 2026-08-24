@@ -52,6 +52,8 @@ Note that writing into an HDF5 file element-by-element is much slower than keepi
 
 Values passed to `push!` must already be instances of the HDF5Vector's declared element type; HDF5Vectors does not convert them to that type.
 
+`chunk_length` must be a positive integer. When `dims` is provided for a dynamic array type, it must be a tuple of positive integers whose length matches the array rank.
+
 ## Supported Types
 
 This works for storing many common types, including:
@@ -107,6 +109,10 @@ arr = create_hdf5_vector(...)
 ```
 
 The reason this is faster is that [`iterable`](@ref) creates a structure intended to take advantage of the way HDF5.jl will access the data.
+
+## Replacing Elements
+
+`setindex!` is available when the storage representation can replace an element in place. Byte-array serialization is append-only and does not support replacement. A composite vector supports `setindex!` only when every field does; otherwise, the operation throws an error before changing any field. Supported composite replacements are not transactional, so an unrecoverable HDF5 error can still leave some fields changed and others unchanged.
 
 ## Loading an Existing Array
 

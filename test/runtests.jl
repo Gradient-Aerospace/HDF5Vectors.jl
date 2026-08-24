@@ -268,6 +268,105 @@ end
 
 end
 
+@testset "creation option validation" begin
+
+    h5open("$out_dir/creation_option_validation.h5", "w") do fid
+
+        # Invalid chunk lengths should fail before creating an HDF5 group.
+        @test_throws ArgumentError create_hdf5_vector(
+            fid["/"], "zero_chunk", Int64; chunk_length = 0,
+        )
+        @test_throws ArgumentError create_hdf5_vector(
+            fid["/"], "float_chunk", Int64; chunk_length = 2.5,
+        )
+        @test !haskey(fid, "zero_chunk")
+        @test !haskey(fid, "float_chunk")
+
+        # Dynamic arrays require positive integer dimensions with the correct rank.
+        @test_throws DimensionMismatch create_hdf5_vector(
+            fid["/"],
+            "wrong_rank",
+            Vector{Float64};
+            dims = (2, 3),
+        )
+        @test_throws ArgumentError create_hdf5_vector(
+            fid["/"],
+            "float_dims",
+            Vector{Float64};
+            dims = (2.0,),
+        )
+        @test_throws ArgumentError create_hdf5_vector(
+            fid["/"],
+            "zero_dims",
+            Vector{Float64};
+            dims = (0,),
+        )
+
+        # Dimensions supplied for statically sized arrays must match their type.
+        @test_throws DimensionMismatch create_hdf5_vector(
+            fid["/"],
+            "wrong_static_dims",
+            SVector{2, Float64};
+            dims = (3,),
+        )
+
+    end
+
+end
+
+@testset "array-like element validation" begin
+
+    h5open("$out_dir/arrayish_element_validation.h5", "w") do fid
+
+        arr = create_hdf5_vector(fid["/"], "vectors", Vector{Float64}; dims = (2,))
+        original = [1.0, 2.0]
+        push!(arr, original)
+
+        # Shape errors must be reported before a push extends the dataset or setindex!
+        # replaces the existing value.
+        @test_throws DimensionMismatch push!(arr, [3.0, 4.0, 5.0])
+        @test length(arr) == 1
+        @test size(arr.dataset) == (2, 1)
+        @test_throws DimensionMismatch setindex!(arr, [3.0, 4.0, 5.0], 1)
+        @test collect(arr) == [original]
+
+        replacement = [6.0, 7.0]
+        arr[1] = replacement
+        @test collect(arr) == [replacement]
+        @test_throws HDF5.API.H5Error setindex!(arr, replacement, 2)
+        @test collect(arr) == [replacement]
+
+    end
+
+end
+
+@testset "setindex! storage support" begin
+
+    h5open("$out_dir/setindex_support.h5", "w") do fid
+
+        # A composite with entirely in-place child storage supports replacement.
+        elemental_composite = create_hdf5_vector(fid["/"], "elemental_composite", MyType)
+        push!(elemental_composite, MyType(1, 2.0))
+        elemental_composite[1] = MyType(3, 4.0)
+        @test collect(elemental_composite) == [MyType(3, 4.0)]
+
+        # This composite's vector field uses append-only byte storage. Reject replacement
+        # before changing its earlier string field.
+        append_only_composite = create_hdf5_vector(
+            fid["/"],
+            "append_only_composite",
+            MyNonBitsType,
+        )
+        original = MyNonBitsType("original", [1, 2])
+        replacement = MyNonBitsType("replacement", [3, 4])
+        push!(append_only_composite, original)
+        @test_throws ArgumentError setindex!(append_only_composite, replacement, 1)
+        @test collect(append_only_composite) == [original]
+
+    end
+
+end
+
 @testset "serialization types" begin
 
     h5open("$out_dir/serialization_types.h5", "w") do fid
@@ -289,12 +388,16 @@ end
 
 end
 
-# verify error behaviour for unsupported operations
 @testset "error conditions" begin
+
     h5open("$out_dir/error_conditions.h5", "w") do fid
+
         # ByteArray style does not support setindex!
-        arr = create_hdf5_vector(fid["/"], "bytes", MySerializingType; portable=true)
-        push!(arr, MySerializingType("x", [1.], MyType(1,2)))
-        @test_throws ErrorException setindex!(arr, MySerializingType("y",[2.],MyType(3,4)), 1)
+        arr = create_hdf5_vector(fid["/"], "bytes", MySerializingType; portable = true)
+        push!(arr, MySerializingType("x", [1.0], MyType(1, 2)))
+        replacement = MySerializingType("y", [2.0], MyType(3, 4))
+        @test_throws ErrorException setindex!(arr, replacement, 1)
+
     end
+
 end

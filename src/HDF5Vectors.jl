@@ -272,8 +272,8 @@ function deconstruct end
 """
 An abstract type intended as the parent for all type of HDF5 vectors. Subtypes should have
 a corresponding storage style and implement [`create_hdf5_vector`](@ref), and at least these
-parts of the AbstractArray interface: `length`, `setindex!`, `push!`, `getindex`, and
-`collect`.
+parts of the AbstractArray interface: `length`, `push!`, `getindex`, and `collect`.
+`setindex!` is optional for storage that supports in-place replacement.
 """
 abstract type AbstractHDF5Vector{T} <: AbstractVector{T} end
 
@@ -284,6 +284,57 @@ Base.IndexStyle(::Type{<:AbstractHDF5Vector}) = IndexLinear()
 Base.broadcastable(arr::AbstractHDF5Vector) = collect(arr)
 # Base.BroadcastStyle(::Type{SrcType}) = SrcStyle()
 # Base.similar(bc::Broadcasted{DestStyle}, ::Type{ElType})
+
+# Composite storage checks this before replacing any field, so append-only children can
+# reject the operation before another child is changed.
+supports_setindex(::AbstractHDF5Vector) = false
+
+function validate_chunk_length(chunk_length)
+    if !(chunk_length isa Integer) || chunk_length isa Bool || chunk_length <= 0
+        throw(ArgumentError("chunk_length must be a positive integer; got $chunk_length."))
+    end
+    return Int64(chunk_length)
+end
+
+function validate_dims(dims, expected_ndims)
+
+    if isnothing(dims)
+        return nothing
+    elseif !(dims isa Tuple)
+        throw(ArgumentError("dims must be a tuple of positive integers; got $dims."))
+    elseif length(dims) != expected_ndims
+        throw(DimensionMismatch(
+            "Expected $expected_ndims dimensions, but dims contains $(length(dims)).",
+        ))
+    elseif any(dim -> !(dim isa Integer) || dim isa Bool || dim <= 0, dims)
+        throw(ArgumentError("dims must be a tuple of positive integers; got $dims."))
+    end
+
+    return Tuple(Int64(dim) for dim in dims)
+
+end
+
+function validate_fixed_dims(dims, expected_dims)
+
+    if isnothing(dims)
+        return expected_dims
+    elseif !(dims isa Tuple) || any(
+        dim -> !(dim isa Integer) || dim isa Bool || dim < 0,
+        dims,
+    )
+        throw(ArgumentError("dims must be a tuple of nonnegative integers; got $dims."))
+    end
+
+    dims = Tuple(Int64(dim) for dim in dims)
+    if dims != expected_dims
+        throw(DimensionMismatch(
+            "The provided dimensions $dims do not match the type dimensions " *
+            "$expected_dims.",
+        ))
+    end
+    return expected_dims
+
+end
 
 # This should take care of operations like `sum` and `mean`.
 function Base.mapreduce(f, op, arr::AbstractHDF5Vector; kwargs...)
@@ -405,14 +456,16 @@ the given HDF5 `group`` in a new group/dataset, `name`.
 
 Optional keyword arguments:
 
-* `dims`: Tuple of the dimensions to use for a Vector, Matrix, or Array
-* `chunk_length`: Length of chunk to use (default 1000)
+* `dims`: Tuple of positive integer dimensions to use for a Vector, Matrix, or Array; its
+  length must match the array rank
+* `chunk_length`: Positive integer length of each HDF5 chunk (default 1000)
 * `portable`: True to maximize how "portable" the storage is (default true)
 """
 function create_hdf5_vector(
     group, name, el_type;
     dims = nothing, chunk_length = 1000, portable = true,
 )
+    chunk_length = validate_chunk_length(chunk_length)
     return create_hdf5_vector(
         storage_style(el_type; dims, portable),
         group, name, el_type;
@@ -455,6 +508,7 @@ function copy_to_hdf5_vector(
     group, name, collection;
     dims = nothing, chunk_length = 1000, portable = true,
 )
+    chunk_length = validate_chunk_length(chunk_length)
     return copy_to_hdf5_vector(
         storage_style(eltype(collection); dims, portable),
         group, name, collection;
@@ -489,8 +543,9 @@ implementation hook for storage backends; users should select a style by definin
 
 Optional keyword arguments:
 
-* `dims`: Tuple of the dimensions to use for a Vector, Matrix, or Array
-* `chunk_length`: Length of chunk to use (default 1000)
+* `dims`: Tuple of positive integer dimensions to use for a Vector, Matrix, or Array; its
+  length must match the array rank
+* `chunk_length`: Positive integer length of each HDF5 chunk (default 1000)
 * `portable`: True to maximize how "portable" the storage is (default true)
 """
 function create_hdf5_vector(style::AbstractHDF5VectorStorageStyle, group, name, el_type; kwargs...)
@@ -564,8 +619,11 @@ function load_hdf5_vector(style::ElementalStorageStyle, group, el_type; kwargs..
 end
 
 Base.length(arr::HDF5VectorOfElementalTypes) = arr.count # Common with HDF5VectorOfArrayishTypes
-function Base.setindex!(arr::HDF5VectorOfElementalTypes{T, DT}, el, k) where {T, DT}
+supports_setindex(::HDF5VectorOfElementalTypes) = true
+
+function Base.setindex!(arr::HDF5VectorOfElementalTypes{T}, el::T, k::Int) where {T}
     arr.dataset[k] = deconstruct(typeof(arr), el)
+    return el
 end
 function Base.getindex(arr::HDF5VectorOfElementalTypes{T, DT}, k::Int) where {T, DT}
     construct(typeof(arr), read(arr.dataset, DT, k))
@@ -578,7 +636,7 @@ end
 function Base.push!(arr::HDF5VectorOfElementalTypes{T}, el::T) where {T}
     next_count = arr.count + 1
     HDF5.set_extent_dims(arr.dataset, (next_count,))
-    arr[next_count] = el
+    arr.dataset[next_count] = deconstruct(typeof(arr), el)
     arr.count = next_count
     return arr
 end
@@ -661,11 +719,10 @@ function load_hdf5_vector(style::SingletonStorageStyle, group, el_type; kwargs..
 end
 
 Base.length(arr::HDF5VectorOfSingletonTypes) = arr.count
-function Base.setindex!(arr::HDF5VectorOfSingletonTypes{T}, el, k::Int) where {T}
-    if k <= 0 || k > arr.count
-        error("Index $k was out of bounds: [1, $(arr.count)].")
-    end
-    convert(T, el)
+supports_setindex(::HDF5VectorOfSingletonTypes) = true
+
+function Base.setindex!(arr::HDF5VectorOfSingletonTypes{T}, el::T, k::Int) where {T}
+    checkbounds(arr, k)
     return el
 end
 function Base.getindex(arr::HDF5VectorOfSingletonTypes{T}, k::Int) where {T}
@@ -758,9 +815,30 @@ end
 @inline colons(D) = Tuple(Colon() for _ in fieldtypes(D))
 
 Base.length(arr::HDF5VectorOfArrayishTypes) = arr.count
+supports_setindex(::HDF5VectorOfArrayishTypes) = true
 
-function Base.setindex!(arr::HDF5VectorOfArrayishTypes{T, D, DT}, el, k) where {T, D, DT}
+validate_arrayish_element(::HDF5VectorOfArrayishTypes{T}, ::T) where {T} = nothing
+
+function validate_arrayish_element(
+    arr::HDF5VectorOfArrayishTypes{T, D},
+    el::T,
+) where {T <: Array, D}
+
+    expected_dims = fieldtypes(D)
+    actual_dims = size(el)
+    if actual_dims != expected_dims
+        throw(DimensionMismatch(
+            "Expected an element with dimensions $expected_dims, but got $actual_dims.",
+        ))
+    end
+    return el
+
+end
+
+function Base.setindex!(arr::HDF5VectorOfArrayishTypes{T, D}, el::T, k::Int) where {T, D}
+    validate_arrayish_element(arr, el)
     arr.dataset[colons(D)..., k] = deconstruct(typeof(arr), el)
+    return el
 end
 function Base.getindex(arr::HDF5VectorOfArrayishTypes{T, D, DT}, k::Int) where {T, D, DT}
     construct(typeof(arr), read(arr.dataset, DT, colons(D)..., k))
@@ -779,9 +857,10 @@ function Base.collect(arr::HDF5VectorOfArrayishTypes{T, D, DT}) where {T, D, DT}
 end
 
 function Base.push!(arr::HDF5VectorOfArrayishTypes{T, D}, el::T) where {T, D}
+    validate_arrayish_element(arr, el)
     next_count = arr.count + 1
     HDF5.set_extent_dims(arr.dataset, (fieldtypes(D)..., next_count,))
-    arr[next_count] = el
+    arr.dataset[colons(D)..., next_count] = deconstruct(typeof(arr), el)
     arr.count = next_count
     return arr
 end
@@ -938,11 +1017,25 @@ end
 
 Base.length(arr::HDF5VectorOfCompositeTypes) = arr.count
 
-function Base.setindex!(arr::HDF5VectorOfCompositeTypes{T}, el, k) where {T}
+function supports_setindex(arr::HDF5VectorOfCompositeTypes)
+    return all(supports_setindex, arr.arrays)
+end
+
+function Base.setindex!(arr::HDF5VectorOfCompositeTypes{T}, el::T, k::Int) where {T}
+
+    checkbounds(arr, k)
+    if !supports_setindex(arr)
+        throw(ArgumentError(
+            "setindex! is not supported because at least one field uses " *
+            "append-only storage.",
+        ))
+    end
+
     for (sub_array, fn) in zip(arr.arrays, fieldnames(T))
         setindex!(sub_array, getproperty(el, fn), k)
     end
     return el
+
 end
 
 function Base.push!(arr::HDF5VectorOfCompositeTypes{T}, el::T) where {T}
@@ -1037,11 +1130,12 @@ deconstruct(::Type{HDF5VectorOfElementalTypes{T, DT}}, el::Enum) where {T <: Enu
 ##########
 
 function storage_style(t::Type{Tuple{}}; dims = nothing, kwargs...)
+    validate_fixed_dims(dims, (0,))
     return SingletonStorageStyle()
 end
 function storage_style(t::Type{NTuple{N, T}}; dims = nothing, kwargs...) where {N, T}
+    validate_fixed_dims(dims, (N,))
     if is_elemental(T; kwargs...)
-        @assert isnothing(dims) || dims == (N,) "The dimensions of the NTuple ($N) don't match the provided `dims` keyword argument, $dims."
         return ArrayStorageStyle(T, (N,))
     else
         return CompositeStorageStyle()
@@ -1075,6 +1169,7 @@ end
 # dimensions are known and it stores elemental types, then we can use our efficient
 # ArrayStorageStyle. See if the eltype of the Array shold use the elemental style.
 function storage_style(::Type{<:Array{T, N}}; dims = nothing, kwargs...) where {T, N}
+    dims = validate_dims(dims, N)
     if !isnothing(dims) && is_elemental(T; kwargs...)
         return ArrayStorageStyle(T, dims)
     else
@@ -1090,6 +1185,7 @@ deconstruct(::Type{HDF5VectorOfArrayishTypes{T, D, DT}}, el) where {T <: Array, 
 ###########
 
 function storage_style(t::Type{SVector{N, T}}; dims = nothing, kwargs...) where {N, T}
+    validate_fixed_dims(dims, (N,))
     if N == 0
         return SingletonStorageStyle()
     elseif is_elemental(T; kwargs...)
@@ -1115,10 +1211,10 @@ deconstruct(::Type{HDF5VectorOfCompositeTypes{T}}, el) where {T <: SVector} = (e
 using StaticArrays: SMatrix
 
 function storage_style(::Type{SMatrix{M, N, T, L}}; dims = nothing, kwargs...) where {M, N, T, L}
+    validate_fixed_dims(dims, (M, N))
     if L == 0
         return SingletonStorageStyle()
     elseif is_elemental(T; kwargs...)
-        @assert isnothing(dims) || dims == (M, N) "The dimensions of the SMatrix ($M, $N) don't match the provided `dims` keyword argument, $dims."
         return ArrayStorageStyle(T, (M, N,))
     else
         return CompositeStorageStyle()
@@ -1141,11 +1237,10 @@ deconstruct(::Type{HDF5VectorOfCompositeTypes{T}}, el) where {T <: SMatrix} = (e
 using StaticArrays: SArray
 
 function storage_style(::Type{SArray{S, T, D, L}}; dims = nothing, kwargs...) where {S, T, D, L}
+    dims = validate_fixed_dims(dims, fieldtypes(S))
     if L == 0
         return SingletonStorageStyle()
     elseif is_elemental(T; kwargs...)
-        @assert isnothing(dims) || dims == fieldtypes(S) "The dimensions of the SArray $(fieldtypes(S))  don't match the provided `dims` keyword argument, $dims."
-        dims = fieldtypes(S) # This returns a tuple of numbers because S uses "value types".
         return ArrayStorageStyle(T, dims)
     else
         return CompositeStorageStyle()

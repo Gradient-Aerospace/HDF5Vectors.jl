@@ -29,11 +29,12 @@ function HDF5Vectors.load_hdf5_vector(style::HDF5Vectors.JSONStorageStyle, group
     )
 end
 Base.length(arr::HDF5VectorWithJSONStorage) = length(arr.storage)
+HDF5Vectors.supports_setindex(::HDF5VectorWithJSONStorage) = true
 function Base.push!(arr::HDF5VectorWithJSONStorage{T}, el::T) where {T}
     push!(arr.storage, JSON3.write(el))
     return arr
 end
-function Base.setindex!(arr::HDF5VectorWithJSONStorage, el, k)
+function Base.setindex!(arr::HDF5VectorWithJSONStorage{T}, el::T, k::Int) where {T}
     setindex!(arr.storage, JSON3.write(el), k)
     return el
 end
