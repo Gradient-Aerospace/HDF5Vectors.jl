@@ -67,6 +67,12 @@ String-like types:
 * String
 * Symbol
 
+Singleton types:
+
+* `Nothing`
+* Immutable zero-field marker types with zero-argument constructors
+* Empty tuples, named tuples, and static arrays
+
 Array-like types:
 
 * SVector, SMatrix, and SArray of elemental type
@@ -85,6 +91,9 @@ Serialized types:
 * Any type that serializes to a JSON string
 
 Serialization provides a fall-back approach for logging to HDF5 when other logging types don't make sense. For instance, any type whose structure may change from element to element (a nonconcrete type) defaults to using serialization for logging. This is slow, but it works. See "Specifying a Storage Type", below, for more.
+
+Primitive types that HDF5.jl does not natively support, including `Float16`, `Int128`, and
+`UInt128`, are rejected unless the user defines another storage style for them.
 
 ## Iteration
 

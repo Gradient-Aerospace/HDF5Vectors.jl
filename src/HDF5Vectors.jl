@@ -12,6 +12,7 @@ It generally can store vectors of elements with fixed sizes, where that element 
 * Vector, Matrix, and Array of any types on this list, as long as their dimensions are
   always the same
 * String
+* reconstructible singleton types
 
 Further, it can serialize types to bytes or strings and store those in the HDF5 file. This
 allows it to store:
@@ -68,6 +69,34 @@ struct CompositeStorageStyle <: AbstractHDF5VectorStorageStyle end
 # Interface #
 #############
 
+function singleton_value(::Type{T}) where {T}
+
+    if !applicable(T)
+        throw(ArgumentError(
+            "The singleton type $T does not have a zero-argument constructor and cannot " *
+            "use SingletonStorageStyle.",
+        ))
+    end
+
+    value = T()
+    if !(value isa T)
+        throw(ArgumentError(
+            "The zero-argument constructor for singleton type $T did not return a $T.",
+        ))
+    end
+    return value
+
+end
+
+singleton_value(::Type{NamedTuple{(), Tuple{}}}) = (;)
+
+function unsupported_element_type(el_type, reason)
+    throw(ArgumentError(
+        "HDF5Vectors does not support the element type $el_type: $reason " *
+        "Define a storage_style method for this type to select an explicit storage format.",
+    ))
+end
+
 # These are the only functions types will have to implement to use ElementalStorageStyle
 # or ArrayStorageStyle
 
@@ -80,6 +109,7 @@ struct CompositeStorageStyle <: AbstractHDF5VectorStorageStyle end
 Returns the storage style intended for this type. Available styles include:
 
 * `ElementalStorageStyle` for scalars or non-portable bits-type structs
+* `SingletonStorageStyle` for types that have exactly one possible value
 * `ArrayStorageStyle` for arrays of known, consistent dimensions holding elemental types
 * `CompositeStorageStyle` for general structs
 * `ByteArrayStorageStyle` for arrays of inconsistent dimensions
@@ -87,9 +117,10 @@ Returns the storage style intended for this type. Available styles include:
 
 The default storage style for scalars and "non-portable" bits-type structs (more
 below) is `ElementalStorageStyle`. For vectors with known dimensions, `ArrayStorageStyle`
-is the default. For other structs (either non-bits-types or "portable"), the default is
-`CompositeStorageStyle`. For all other types, `ByteArrayStorageStyle` is the default storage
-style.
+is the default. Singleton types use `SingletonStorageStyle`. For other structs (either
+non-bits-types or "portable"), the default is `CompositeStorageStyle`. Nonconcrete types and
+arrays without known dimensions default to `ByteArrayStorageStyle`. Unsupported primitive
+types produce an error unless the user explicitly defines another storage style.
 
 Array storage results in HDF5 files where the dataset has the dimensions of each element,
 plus one added dimension. For instance, if each element to be stored is an m-by-n array,
@@ -152,15 +183,36 @@ function storage_style(el_type::Type; portable = true, kwargs...)
 
     # The HDF5-native types don't even get here. They have their own storage_style. If we're
     # here, then we have no other specified storage style to use, and we need to figure out
-    # a safe on.
+    # a safe one.
 
     # We can figure out the fields of concrete types.
     if isconcretetype(el_type)
 
-        if length(fieldnames(el_type)) == 0
+        if Base.issingletontype(el_type)
 
-            # First, if the type appears to be empty, we'll just go with the empty style.
-            return EmptyStorageStyle(el_type)
+            # Singleton values need no per-element storage, but we must be able to construct
+            # the value through a public interface when loading the vector.
+            singleton_value(el_type)
+            return SingletonStorageStyle()
+
+        elseif isprimitivetype(el_type)
+
+            # All HDF5-native primitive types have more-specific storage_style methods. An
+            # unknown primitive type has no fields to store as a composite and must not be
+            # mistaken for a singleton.
+            return unsupported_element_type(
+                el_type,
+                "HDF5.jl does not provide a native datatype for it.",
+            )
+
+        elseif isempty(fieldnames(el_type))
+
+            # Mutable zero-field structs have distinct identities despite carrying no
+            # fields. There is no value representation that this package can preserve.
+            return unsupported_element_type(
+                el_type,
+                "it has no fields but is not a singleton type.",
+            )
 
         elseif isbitstype(el_type) && !portable
 
@@ -525,86 +577,99 @@ function is_elemental(type; kwargs...)
     return isa(storage_style(type; kwargs...), ElementalStorageStyle)
 end
 
-##########################
-# HDF5VectorOfEmptyTypes #
-##########################
+##############################
+# HDF5VectorOfSingletonTypes #
+##############################
 
-# We may need to store "empty" types that HDF5 has no way of representing, like an empty
-# tuple. To do this, we store the metadata like normal (which includes the type we'll need
-# to reconstruct whatever "empty" type this is), but we store no data. Instead, we store a
-# length -- how many empties have been "written" to the HDF5 file. When accessing this data,
-# we construct the appropriate empty type as long as the requested index is in range.
+# Singleton types have exactly one possible value, so each vector element is already known
+# from the element type. We store only the vector length and reconstruct that value for every
+# valid index.
 
-struct EmptyStorageStyle{HT} <: AbstractHDF5VectorStorageStyle
-    datatype::Type{HT}
-end
+"""
+Used for singleton types whose value can be reconstructed from the element type. Only the
+vector length is stored because the element type determines every value.
+"""
+struct SingletonStorageStyle <: AbstractHDF5VectorStorageStyle end
 
-# We could potentially make other structs like this to specialize on scalar types vs vectors
-# types, but it's not clear that we need to do that.
-mutable struct HDF5VectorOfEmptyTypes{T, DT} <: AbstractHDF5Vector{T}
+mutable struct HDF5VectorOfSingletonTypes{T} <: AbstractHDF5Vector{T}
     dataset::HDF5.Dataset
-    datatype::Type{DT}
     count::Int64
 end
 
-function create_hdf5_vector(style::EmptyStorageStyle, group, name, el_type; chunk_length, portable, kwargs...)
+function create_hdf5_vector(
+    style::SingletonStorageStyle,
+    group,
+    name,
+    el_type;
+    chunk_length,
+    portable,
+    kwargs...,
+)
+
     this_group = HDF5.create_group(group, name)
     store_metadata(style, this_group, el_type; portable)
-    datatype = Int64 # Just a placeholder
-    vector_dims = (1,) # We just store a length.
+
+    # The single integer in the dataset is the vector length.
+    vector_dims = (1,)
     max_dims = (1,)
     dataspace = HDF5.dataspace(vector_dims, max_dims)
-    dataset = create_dataset(this_group, "data", datatype, dataspace)
+    dataset = create_dataset(this_group, "data", Int64, dataspace)
     dataset[1] = 0
-    return HDF5VectorOfEmptyTypes{el_type, datatype}(dataset, datatype, 0)
+    return HDF5VectorOfSingletonTypes{el_type}(dataset, 0)
+
 end
 
-function copy_to_hdf5_vector(style::EmptyStorageStyle, group, name, collection; chunk_length, portable, kwargs...)
+function copy_to_hdf5_vector(
+    style::SingletonStorageStyle,
+    group,
+    name,
+    collection;
+    chunk_length,
+    portable,
+    kwargs...,
+)
+
     el_type = eltype(collection)
     n = length(collection)
     this_group = HDF5.create_group(group, name)
     store_metadata(style, this_group, el_type; portable)
-    datatype = Int64 # Just a placeholder
-    vector_dims = (1,) # We just store a length.
+
+    # The single integer in the dataset is the vector length.
+    vector_dims = (1,)
     max_dims = (1,)
     dataspace = HDF5.dataspace(vector_dims, max_dims)
-    dataset = create_dataset(this_group, "data", datatype, dataspace)
+    dataset = create_dataset(this_group, "data", Int64, dataspace)
     dataset[1] = n
-    return HDF5VectorOfEmptyTypes{el_type, datatype}(dataset, datatype, n)
+    return HDF5VectorOfSingletonTypes{el_type}(dataset, n)
+
 end
 
-function load_hdf5_vector(style::EmptyStorageStyle, group, el_type; kwargs...)
+function load_hdf5_vector(style::SingletonStorageStyle, group, el_type; kwargs...)
     dataset = group["data"]
-    datatype = Int64
     count = dataset[1]
-    return HDF5VectorOfEmptyTypes{el_type, datatype}(dataset, datatype, count)
+    return HDF5VectorOfSingletonTypes{el_type}(dataset, count)
 end
 
-Base.length(arr::HDF5VectorOfEmptyTypes) = arr.count # Common with HDF5VectorOfArrayishTypes
-function Base.setindex!(arr::HDF5VectorOfEmptyTypes, el, k::Int)
+Base.length(arr::HDF5VectorOfSingletonTypes) = arr.count
+function Base.setindex!(arr::HDF5VectorOfSingletonTypes{T}, el, k::Int) where {T}
     if k <= 0 || k > arr.count
         error("Index $k was out of bounds: [1, $(arr.count)].")
     end
+    convert(T, el)
+    return el
 end
-function Base.getindex(arr::HDF5VectorOfEmptyTypes{T, DT}, k::Int) where {T, DT}
+function Base.getindex(arr::HDF5VectorOfSingletonTypes{T}, k::Int) where {T}
     if k <= 0 || k > arr.count
         error("Index $k was out of bounds: [1, $(arr.count)].")
     end
-    if T === NamedTuple{(), Tuple{}}
-        return (;) # Weird special case because NamedTuple{(), Tuple{}}() doesn't work.
-    else
-        return T()
-    end
+    return singleton_value(T)
 end
-function Base.collect(arr::HDF5VectorOfEmptyTypes{T, DT}) where {T, DT}
-    if T === NamedTuple{(), Tuple{}}
-        return [(;) for _ in 1:arr.count] # Weird special case.
-    else
-        return [T() for _ in 1:arr.count]
-    end
+function Base.collect(arr::HDF5VectorOfSingletonTypes{T}) where {T}
+    return fill(singleton_value(T), arr.count)
 end
 
-function Base.push!(arr::HDF5VectorOfEmptyTypes, el)
+function Base.push!(arr::HDF5VectorOfSingletonTypes{T}, el) where {T}
+    convert(T, el)
     arr.count += 1
     arr.dataset[1] = arr.count # We just store the length.
     return arr
@@ -961,7 +1026,7 @@ deconstruct(::Type{HDF5VectorOfElementalTypes{T, DT}}, el::Enum) where {T <: Enu
 ##########
 
 function storage_style(t::Type{Tuple{}}; dims = nothing, kwargs...)
-    return EmptyStorageStyle(t)
+    return SingletonStorageStyle()
 end
 function storage_style(t::Type{NTuple{N, T}}; dims = nothing, kwargs...) where {N, T}
     if is_elemental(T; kwargs...)
@@ -1015,7 +1080,7 @@ deconstruct(::Type{HDF5VectorOfArrayishTypes{T, D, DT}}, el) where {T <: Array, 
 
 function storage_style(t::Type{SVector{N, T}}; dims = nothing, kwargs...) where {N, T}
     if N == 0
-        return EmptyStorageStyle(t)
+        return SingletonStorageStyle()
     elseif is_elemental(T; kwargs...)
         return ArrayStorageStyle(T, (N,))
     else
@@ -1039,7 +1104,9 @@ deconstruct(::Type{HDF5VectorOfCompositeTypes{T}}, el) where {T <: SVector} = (e
 using StaticArrays: SMatrix
 
 function storage_style(::Type{SMatrix{M, N, T, L}}; dims = nothing, kwargs...) where {M, N, T, L}
-    if is_elemental(T; kwargs...)
+    if L == 0
+        return SingletonStorageStyle()
+    elseif is_elemental(T; kwargs...)
         @assert isnothing(dims) || dims == (M, N) "The dimensions of the SMatrix ($M, $N) don't match the provided `dims` keyword argument, $dims."
         return ArrayStorageStyle(T, (M, N,))
     else
@@ -1063,7 +1130,9 @@ deconstruct(::Type{HDF5VectorOfCompositeTypes{T}}, el) where {T <: SMatrix} = (e
 using StaticArrays: SArray
 
 function storage_style(::Type{SArray{S, T, D, L}}; dims = nothing, kwargs...) where {S, T, D, L}
-    if is_elemental(T; kwargs...)
+    if L == 0
+        return SingletonStorageStyle()
+    elseif is_elemental(T; kwargs...)
         @assert isnothing(dims) || dims == fieldtypes(S) "The dimensions of the SArray $(fieldtypes(S))  don't match the provided `dims` keyword argument, $dims."
         dims = fieldtypes(S) # This returns a tuple of numbers because S uses "value types".
         return ArrayStorageStyle(T, dims)

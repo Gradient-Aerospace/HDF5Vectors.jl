@@ -111,7 +111,14 @@ struct MyNoncreteType
     x::NamedTuple
 end
 
-struct MyEmptyType
+struct MySingletonType
+end
+
+struct MySingletonWithoutZeroArgumentConstructor
+    MySingletonWithoutZeroArgumentConstructor(::Nothing) = new()
+end
+
+mutable struct MyMutableZeroFieldType
 end
 
 out_dir = "out"
@@ -145,14 +152,72 @@ end
     end
 end
 
-@testset "empty types (portable = $portable)" for portable in (true, false)
+@testset "singleton types (portable = $portable)" for portable in (true, false)
+
+    # Singleton vectors store only their length, but they should otherwise support the same
+    # create, push, copy, reload, and append operations as vectors with stored values.
     create_kwargs = (; portable, )
-    h5open("$out_dir/empty_types.h5", "w") do fid
-        test_collection(fid, "empty_ntuples", [Tuple{}() for k in 1:11]; create_kwargs)
-        test_collection(fid, "empty_svectors_of_floats", [SVector{0, Float64}() for k in 1:12]; create_kwargs)
-        test_collection(fid, "empty_types", [MyEmptyType() for _ in 1:10]; create_kwargs)
-        test_collection(fid, "empty_named_tuples", [(;) for _ in 1:10]; create_kwargs)
+    h5open("$out_dir/singleton_types.h5", "w") do fid
+
+        # Exercise built-in singleton containers, including zero-size static arrays whose
+        # shapes still differ at the type level.
+        test_collection(fid, "singleton_ntuples", [Tuple{}() for _ in 1:11]; create_kwargs)
+        test_collection(
+            fid,
+            "singleton_svectors_of_floats",
+            [SVector{0, Float64}() for _ in 1:12];
+            create_kwargs,
+        )
+
+        test_collection(
+            fid,
+            "singleton_smatrices_of_floats",
+            [SMatrix{0, 2, Float64, 0}() for _ in 1:12];
+            create_kwargs,
+        )
+        test_collection(
+            fid,
+            "singleton_sarrays_of_floats",
+            [SArray{Tuple{0, 2, 1}, Float64, 3, 0}() for _ in 1:12];
+            create_kwargs,
+        )
+
+        # Exercise ordinary user-defined and Julia singleton types, including the empty
+        # named tuple whose type does not provide a zero-argument constructor.
+        test_collection(
+            fid,
+            "singleton_types",
+            [MySingletonType() for _ in 1:10];
+            create_kwargs,
+        )
+        test_collection(fid, "singleton_named_tuples", [(;) for _ in 1:10]; create_kwargs)
+        test_collection(fid, "nothings", fill(nothing, 10); create_kwargs)
+        test_collection(fid, "vals", fill(Val(:reset), 10); create_kwargs)
+
     end
+
+end
+
+@testset "unsupported zero-field types" begin
+
+    h5open("$out_dir/unsupported_zero_field_types.h5", "w") do fid
+
+        # Unsupported primitives must not be mistaken for singletons merely because they
+        # have no fields. Likewise, singleton storage must preserve value semantics rather
+        # than silently accepting unreconstructible or mutable zero-field types.
+        unsupported_types = (
+            Float16,
+            Int128,
+            UInt128,
+            MySingletonWithoutZeroArgumentConstructor,
+            MyMutableZeroFieldType,
+        )
+        for type in unsupported_types
+            @test_throws ArgumentError create_hdf5_vector(fid["/"], string(type), type)
+        end
+
+    end
+
 end
 
 @testset "composite types (portable = $portable)" for portable in (true, false)
