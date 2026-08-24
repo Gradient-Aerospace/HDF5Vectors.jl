@@ -98,12 +98,13 @@ function unsupported_element_type(el_type, reason)
     ))
 end
 
-# These are the only functions types will have to implement to use ElementalStorageStyle
+# These are the only functions types we have to implement to use ElementalStorageStyle
 # or ArrayStorageStyle
 
 # Types that aren't native HDF5 scalars but that are bits-types can still be stored using
 # the elemental storage type, but that's not portable, so this function considers
 # portability before deciding to store non-native types as elemental or composite.
+
 """
     storage_style(el_type::Type; kwargs...)
 
@@ -574,10 +575,11 @@ function Base.collect(arr::HDF5VectorOfElementalTypes{T, DT}) where {T, DT}
     return [construct(typeof(arr), el) for el in data]
 end
 
-function Base.push!(arr::HDF5VectorOfElementalTypes, el)
-    arr.count += 1
-    HDF5.set_extent_dims(arr.dataset, (arr.count,))
-    arr[arr.count] = el
+function Base.push!(arr::HDF5VectorOfElementalTypes{T}, el::T) where {T}
+    next_count = arr.count + 1
+    HDF5.set_extent_dims(arr.dataset, (next_count,))
+    arr[next_count] = el
+    arr.count = next_count
     return arr
 end
 
@@ -676,10 +678,10 @@ function Base.collect(arr::HDF5VectorOfSingletonTypes{T}) where {T}
     return fill(singleton_value(T), arr.count)
 end
 
-function Base.push!(arr::HDF5VectorOfSingletonTypes{T}, el) where {T}
-    convert(T, el)
-    arr.count += 1
-    arr.dataset[1] = arr.count # We just store the length.
+function Base.push!(arr::HDF5VectorOfSingletonTypes{T}, el::T) where {T}
+    next_count = arr.count + 1
+    arr.dataset[1] = next_count # We just store the length.
+    arr.count = next_count
     return arr
 end
 
@@ -776,10 +778,11 @@ function Base.collect(arr::HDF5VectorOfArrayishTypes{T, D, DT}) where {T, D, DT}
     return collected
 end
 
-function Base.push!(arr::HDF5VectorOfArrayishTypes{T, D, DT}, el) where {T, D, DT}
-    arr.count += 1
-    HDF5.set_extent_dims(arr.dataset, (fieldtypes(D)..., arr.count,))
-    arr[arr.count] = el
+function Base.push!(arr::HDF5VectorOfArrayishTypes{T, D}, el::T) where {T, D}
+    next_count = arr.count + 1
+    HDF5.set_extent_dims(arr.dataset, (fieldtypes(D)..., next_count,))
+    arr[next_count] = el
+    arr.count = next_count
     return arr
 end
 
@@ -817,7 +820,7 @@ function load_hdf5_vector(style::ByteArrayStorageStyle, group_or_dataset, el_typ
     )
 end
 Base.length(arr::HDF5VectorWithByteArrayStorage) = length(arr.stops)
-function Base.push!(arr::HDF5VectorWithByteArrayStorage, el)
+function Base.push!(arr::HDF5VectorWithByteArrayStorage{T}, el::T) where {T}
     io = IOBuffer()
     Serialization.serialize(io, el)
     count = 0
@@ -942,7 +945,7 @@ function Base.setindex!(arr::HDF5VectorOfCompositeTypes{T}, el, k) where {T}
     return el
 end
 
-function Base.push!(arr::HDF5VectorOfCompositeTypes{T}, el) where {T}
+function Base.push!(arr::HDF5VectorOfCompositeTypes{T}, el::T) where {T}
     for (sub_array, value) in zip(arr.arrays, deconstruct(typeof(arr), el))
         push!(sub_array, value)
     end

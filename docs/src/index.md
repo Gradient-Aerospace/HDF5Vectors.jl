@@ -50,6 +50,8 @@ my_hdf5_vector = copy_to_hdf5_vector(fid["/"], "some_name", my_regular_vector)
 
 Note that writing into an HDF5 file element-by-element is much slower than keeping arrays in RAM, as is reading data back element-by-element, so HDF5Vectors should be used judiciously.
 
+Values passed to `push!` must already be instances of the HDF5Vector's declared element type; HDF5Vectors does not convert them to that type.
+
 ## Supported Types
 
 This works for storing many common types, including:
@@ -162,6 +164,8 @@ If the HDF5 vector were created in the `/my_group` group with the name `my_type`
 /my_group/my_type/data/b/data/c  # Array of 100 Int64
 /my_group/my_type/data/b/data/d  # Array of 2-by-100 Float64
 ```
+
+Note that a failed `push!` for a composite type may result in some fields of the composite type having updated values while others do not.
 
 For bits-type structs, a user can specify that they want "non-portable" storage. This means that the HDF5.jl package can define a custom HDF5 type to store the struct, and the resulting HDF5 file will look like this:
 

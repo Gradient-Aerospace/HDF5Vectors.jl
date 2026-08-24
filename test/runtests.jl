@@ -248,6 +248,26 @@ end
 
 end
 
+@testset "in-memory counts follow successful writes" begin
+
+    h5open("$out_dir/failed_push.h5", "w") do fid
+
+        # The declared element type is a strict input contract rather than a conversion
+        # request.
+        arr = create_hdf5_vector(fid["/"], "values", Int64)
+        @test_throws MethodError push!(arr, Int32(1))
+        @test isempty(arr)
+
+        # A closed dataset provides a deterministic HDF5 write failure. The failed push
+        # must not advance the vector's in-memory count.
+        close(arr.dataset)
+        @test_throws ErrorException push!(arr, 1)
+        @test isempty(arr)
+
+    end
+
+end
+
 @testset "serialization types" begin
 
     h5open("$out_dir/serialization_types.h5", "w") do fid

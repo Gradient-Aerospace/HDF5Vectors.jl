@@ -29,7 +29,7 @@ function HDF5Vectors.load_hdf5_vector(style::HDF5Vectors.JSONStorageStyle, group
     )
 end
 Base.length(arr::HDF5VectorWithJSONStorage) = length(arr.storage)
-function Base.push!(arr::HDF5VectorWithJSONStorage, el)
+function Base.push!(arr::HDF5VectorWithJSONStorage{T}, el::T) where {T}
     push!(arr.storage, JSON3.write(el))
     return arr
 end
