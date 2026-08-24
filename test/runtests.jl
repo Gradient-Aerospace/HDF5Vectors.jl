@@ -76,6 +76,9 @@ end
 
 # Here are some custom things we can work with.
 @enum Birds sparrow hawk sparrowhawk
+@enum UInt8Values::UInt8 uint8_zero = 0 uint8_max = 255
+@enum Int64Values::Int64 int64_low = -3_000_000_000 int64_high = 3_000_000_000
+@enum Int128Values::Int128 int128_value = 1
 @enumx Ungulates deer horse bison
 struct MyType
     a::Int64
@@ -129,6 +132,19 @@ mkpath("out")
         test_collection(fid, "ints", collect(1 : 10); native = true)
         test_collection(fid, "floats", collect(1. : 12.); native = true)
         test_collection(fid, "enums", [sparrowhawk, hawk, sparrow])
+        uint8_enums = [uint8_max, uint8_zero, uint8_max]
+        int64_enums = [int64_low, int64_high, int64_low]
+        test_collection(fid, "uint8_enums", uint8_enums)
+        test_collection(fid, "int64_enums", int64_enums)
+
+        # Enums should use their declared base type in HDF5 rather than always using Int32.
+        stored_uint8_enums = read(fid["uint8_enums"]["data"])
+        stored_int64_enums = read(fid["int64_enums"]["data"])
+        @test eltype(stored_uint8_enums) === UInt8
+        @test eltype(stored_int64_enums) === Int64
+        @test stored_uint8_enums == UInt8.(vcat(uint8_enums, uint8_enums))
+        @test stored_int64_enums == Int64.(vcat(int64_enums, int64_enums))
+
         test_collection(fid, "enumxs", [Ungulates.horse, Ungulates.deer, Ungulates.bison, Ungulates.deer, Ungulates.horse, Ungulates.deer])
         test_collection(fid, "chars", collect('a' : 'z'))
         test_collection(fid, "strings", collect("element $k" for k in 1:9); native = true)
@@ -209,6 +225,7 @@ end
             Float16,
             Int128,
             UInt128,
+            Int128Values,
             MySingletonWithoutZeroArgumentConstructor,
             MyMutableZeroFieldType,
         )

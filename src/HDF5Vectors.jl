@@ -1152,9 +1152,21 @@ deconstruct(::Type{HDF5VectorOfElementalTypes{Symbol, DT}}, el::Symbol) where {D
 # Enum #
 ########
 
-storage_style(el_type::Type{<:Enum}; kwargs...) = ElementalStorageStyle(Int32) # I don't know why these are Int32 instead of Int.
-construct(::Type{HDF5VectorOfElementalTypes{T, DT}}, el::Int32) where {T <: Enum, DT} = T(el)
-deconstruct(::Type{HDF5VectorOfElementalTypes{T, DT}}, el::Enum) where {T <: Enum, DT} = Int32(el)
+function storage_style(::Type{<:Enum{BT}}; kwargs...) where {BT <: hdf5_scalar_types}
+    return ElementalStorageStyle(BT)
+end
+function construct(
+    ::Type{HDF5VectorOfElementalTypes{T, BT}},
+    el::BT,
+) where {BT, T <: Enum{BT}}
+    return T(el)
+end
+function deconstruct(
+    ::Type{HDF5VectorOfElementalTypes{T, BT}},
+    el::T,
+) where {BT, T <: Enum{BT}}
+    return BT(el)
+end
 
 ##########
 # NTuple #
