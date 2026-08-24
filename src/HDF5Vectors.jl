@@ -449,17 +449,29 @@ function store_metadata(style::AbstractHDF5VectorStorageStyle, group, el_type; d
 end
 
 """
-    create_hdf5_vector(group, name, el_type; kwargs...)
+    create_hdf5_vector(
+        group,
+        name,
+        el_type;
+        dims = nothing,
+        chunk_length = 1000,
+        portable = true,
+    )
 
 Creates the appropriate HDF5 vector type for the given element type, storing the vector in
-the given HDF5 `group`` in a new group/dataset, `name`.
+the given HDF5 `group` under `name`.
 
 Optional keyword arguments:
 
-* `dims`: Tuple of positive integer dimensions to use for a Vector, Matrix, or Array; its
-  length must match the array rank
-* `chunk_length`: Positive integer length of each HDF5 chunk (default 1000)
-* `portable`: True to maximize how "portable" the storage is (default true)
+* `dims = nothing`: Dimensions of each dynamically sized array element. This must be a
+  tuple of positive integers whose length matches the array rank. It enables efficient
+  array-like storage for arrays of elemental values; dimensions of tuples and static
+  arrays are inferred from their types.
+* `chunk_length = 1000`: Positive integer chunk length for the underlying HDF5 datasets. It
+  affects storage layout and I/O performance but does not limit the vector length.
+* `portable = true`: When true, use field-oriented storage for composite bits types. When
+  false, permit a faster native HDF5 datatype where available. It is ignored for types with
+  only one supported representation and does not make Julia-serialized data portable.
 """
 function create_hdf5_vector(
     group, name, el_type;
@@ -504,6 +516,32 @@ function load_hdf5_vector(group_or_dataset, el_type; kwargs...)
     return load_hdf5_vector(storage_style(el_type; kwargs...), group_or_dataset, el_type; kwargs...)
 end
 
+"""
+    copy_to_hdf5_vector(
+        group,
+        name,
+        collection;
+        dims = nothing,
+        chunk_length = 1000,
+        portable = true,
+    )
+
+Creates an HDF5 vector using `eltype(collection)` and copies the collection into it. The
+copy uses specialized bulk writes where the selected storage format supports them.
+
+Optional keyword arguments:
+
+* `dims = nothing`: Dimensions of each dynamically sized array element. This must be a
+  tuple of positive integers whose length matches the array rank. It enables efficient
+  array-like storage for arrays of elemental values; dimensions of tuples and static
+  arrays are inferred from their types. Dimensions are not inferred by inspecting the
+  collection.
+* `chunk_length = 1000`: Positive integer chunk length for the underlying HDF5 datasets. It
+  affects storage layout and I/O performance but does not limit the vector length.
+* `portable = true`: When true, use field-oriented storage for composite bits types. When
+  false, permit a faster native HDF5 datatype where available. It is ignored for types with
+  only one supported representation and does not make Julia-serialized data portable.
+"""
 function copy_to_hdf5_vector(
     group, name, collection;
     dims = nothing, chunk_length = 1000, portable = true,
@@ -537,16 +575,9 @@ end
     create_hdf5_vector(style, group, name, el_type; kwargs...)
 
 Creates the appropriate HDF5 vector type for the given storage style and element type,
-storing the vector in the given HDF5 `group`` in a new group/dataset, `name`. This is an
+storing the vector in the given HDF5 `group` under `name`. This is an
 implementation hook for storage backends; users should select a style by defining
 [`storage_style`](@ref) for their element type and call the overload without a style.
-
-Optional keyword arguments:
-
-* `dims`: Tuple of positive integer dimensions to use for a Vector, Matrix, or Array; its
-  length must match the array rank
-* `chunk_length`: Positive integer length of each HDF5 chunk (default 1000)
-* `portable`: True to maximize how "portable" the storage is (default true)
 """
 function create_hdf5_vector(style::AbstractHDF5VectorStorageStyle, group, name, el_type; kwargs...)
     error("There is no implementation of `create_hdf5_vector` for the $(typeof(style)) storage style used for name = $name with el_type = $el_type.")

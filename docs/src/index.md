@@ -50,10 +50,6 @@ my_hdf5_vector = copy_to_hdf5_vector(fid["/"], "some_name", my_regular_vector)
 
 Note that writing into an HDF5 file element-by-element is much slower than keeping arrays in RAM, as is reading data back element-by-element, so HDF5Vectors should be used judiciously.
 
-Values passed to `push!` must already be instances of the HDF5Vector's declared element type; HDF5Vectors does not convert them to that type.
-
-`chunk_length` must be a positive integer. When `dims` is provided for a dynamic array type, it must be a tuple of positive integers whose length matches the array rank.
-
 ## Supported Types
 
 This works for storing many common types, including:
@@ -98,6 +94,10 @@ Serialization provides a fallback approach for logging to HDF5 when other storag
 
 Primitive types that HDF5.jl does not natively support, including `Float16`, `Int128`, and `UInt128`, are rejected unless the user defines another storage style for them.
 
+## Adding Elements
+
+Values passed to `push!` must already be instances of the HDF5 vector's declared element type; HDF5Vectors does not convert them to that type. Elements stored with array-like storage must also have the dimensions declared when the vector was created.
+
 ## Iteration
 
 When iterating over an HDF5Vector, it's far faster to call [`iterable`](@ref) on the vector and then iterate on what that returns. For example:
@@ -140,7 +140,7 @@ These will simply be n-element arrays in the HDF5 file.
 
 When the elements to be stored each have dimensions like (M, N, ...), the HDF5 file will have an array of the appropriate type whose dimensions are (M, N, ..., Z), where Z is the number of elements being stored. This is easy to interpret outside of Julia while also allowing fast access and efficient storage.
 
-When the elements to store are Vector, Matrix, or Array (or any AbstractArray whose dimensions are not known from the type), the `dims = (M, N, ...)` argument must be provided to `create_hdf_vector`. Otherwise, Arrays cannot be generally stored with array-like storage and will instead be serialized to byte arrays, which if far slower and unintepretable outside of Julia.
+When the elements to store are Vector, Matrix, or Array (or any AbstractArray whose dimensions are not known from the type), the `dims = (M, N, ...)` argument must be provided to [`create_hdf5_vector`](@ref) to use array-like storage. Otherwise, arrays cannot generally be stored this way and will instead be serialized to byte arrays, which is far slower and uninterpretable outside Julia.
 
 ### Composite Types
 
