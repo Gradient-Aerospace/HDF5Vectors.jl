@@ -87,13 +87,12 @@ Composite types:
 
 Serialized types:
 
-* Vector, Matrix, and Array of non-elemental type or where the dimensions are not known in advance
-* Any type that serializes to a JSON string
+* Vector, Matrix, and Array of non-elemental type or whose dimensions are not known in advance
+* Custom types explicitly assigned `ByteArrayStorageStyle` or `JSONStorageStyle`
 
-Serialization provides a fall-back approach for logging to HDF5 when other logging types don't make sense. For instance, any type whose structure may change from element to element (a nonconcrete type) defaults to using serialization for logging. This is slow, but it works. See "Specifying a Storage Type", below, for more.
+Serialization provides a fallback approach for logging to HDF5 when other storage types do not make sense. For instance, a nonconcrete type, whose structure may change from element to element, defaults to serialization. This is slow and is intended only for types selected by the rules above. See "Specifying a Storage Type" below for more.
 
-Primitive types that HDF5.jl does not natively support, including `Float16`, `Int128`, and
-`UInt128`, are rejected unless the user defines another storage style for them.
+Primitive types that HDF5.jl does not natively support, including `Float16`, `Int128`, and `UInt128`, are rejected unless the user defines another storage style for them.
 
 ## Iteration
 
@@ -182,7 +181,9 @@ The `JSONStorageStyle` uses the JSON3 package to serialize a given type to a JSO
 
 ## Specifying a Storage Type
 
-Users can specify what "style" of storage should be used for a given type. For instance, suppose we had the following type:
+Users can specify what "style" of storage should be used for a given type. Storage style is a property of the element type and relevant creation options, not an override for one particular vector. The same [`storage_style`](@ref) method is called again when loading the vector, so it must make a consistent selection from those inputs.
+
+For instance, suppose we had the following type:
 
 ```
 @enum ServerStatus unknown up down

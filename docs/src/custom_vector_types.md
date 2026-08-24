@@ -4,13 +4,20 @@
 CurrentModule = HDF5Vectors
 ```
 
-To create a new type of HDF5 vector, you will need to define a new storage style type (`<:AbstractHDF5VectorStorageStyle`), create your type (`<:AbstractHDF5Vector`), and then implement following HDF5Vectors functions:
+To create a new type of HDF5 vector, define a new storage style type (`<:AbstractHDF5VectorStorageStyle`), create the corresponding vector type (`<:AbstractHDF5Vector`), and define [`storage_style`](@ref) for the element types that use it. The style selection must be reproducible from the element type and stored options because it is performed again when loading a vector.
+
+Then implement the following HDF5Vectors storage hooks:
 
 * `create_hdf5_vector(style::MyNewHDF5VectorStorageStyle, group, name, el_type; kwargs...)`
-* `copy_to_hdf5_vector(style::MyNewHDF5VectorStorageStyle, group, name, collection; kwargs...)`
 * `load_hdf5_vector(style::MyNewHDF5VectorStorageStyle, group_or_dataset, el_type; kwargs...)`
 
-as well as the AbstractArray interface:
+The generic `copy_to_hdf5_vector` implementation creates the selected vector and calls `push!` for each element. A storage backend may also implement a specialized bulk-copy method when it can do so more efficiently:
+
+* `copy_to_hdf5_vector(style::MyNewHDF5VectorStorageStyle, group, name, collection; kwargs...)`
+
+These style-taking methods are implementation hooks. Application code should call `create_hdf5_vector` or `copy_to_hdf5_vector` without passing a style directly.
+
+The vector type must also implement the following parts of the AbstractArray interface:
 
 * `Base.length(v)`
 * `Base.setindex!(v, el, k)`

@@ -17,8 +17,9 @@ It generally can store vectors of elements with fixed sizes, where that element 
 Further, it can serialize types to bytes or strings and store those in the HDF5 file. This
 allows it to store:
 
-* Any type that serializes
-* Vector, Matrix, and Array that are different lengths from element to element (via serialization)
+* Custom types explicitly assigned a serialization storage style
+* Vector, Matrix, and Array values whose dimensions are not declared or vary between
+  elements
 
 It fulfills the general AbstractVector interface. Note, however, that iterating directly is
 slow; for far better speed, iterate on `iterable(arr)`.
@@ -112,7 +113,7 @@ Returns the storage style intended for this type. Available styles include:
 * `SingletonStorageStyle` for types that have exactly one possible value
 * `ArrayStorageStyle` for arrays of known, consistent dimensions holding elemental types
 * `CompositeStorageStyle` for general structs
-* `ByteArrayStorageStyle` for arrays of inconsistent dimensions
+* `ByteArrayStorageStyle` for Julia serialization
 * `JSONStorageStyle` for serializing types to JSON strings
 
 The default storage style for scalars and "non-portable" bits-type structs (more
@@ -121,6 +122,11 @@ is the default. Singleton types use `SingletonStorageStyle`. For other structs (
 non-bits-types or "portable"), the default is `CompositeStorageStyle`. Nonconcrete types and
 arrays without known dimensions default to `ByteArrayStorageStyle`. Unsupported primitive
 types produce an error unless the user explicitly defines another storage style.
+
+The storage style is selected again from the element type and stored options when a vector
+is loaded. A custom `storage_style` method must therefore make a consistent choice from
+those inputs. The style-taking storage methods are implementation hooks, not per-vector
+overrides for selecting a different representation.
 
 Array storage results in HDF5 files where the dataset has the dimensions of each element,
 plus one added dimension. For instance, if each element to be stored is an m-by-n array,
@@ -476,7 +482,9 @@ end
     create_hdf5_vector(style, group, name, el_type; kwargs...)
 
 Creates the appropriate HDF5 vector type for the given storage style and element type,
-storing the vector in the given HDF5 `group`` in a new group/dataset, `name`.
+storing the vector in the given HDF5 `group`` in a new group/dataset, `name`. This is an
+implementation hook for storage backends; users should select a style by defining
+[`storage_style`](@ref) for their element type and call the overload without a style.
 
 Optional keyword arguments:
 
