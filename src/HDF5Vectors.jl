@@ -1039,7 +1039,6 @@ function load_hdf5_vector(style::CompositeStorageStyle, group_or_dataset, el_typ
         for (fn, ft) in zip(fieldnames(el_type), fieldtypes(el_type))
     ]
     if isempty(arrays)
-        @show el_type
         return HDF5VectorOfCompositeTypes{el_type}(arrays, 0)
     else
         return HDF5VectorOfCompositeTypes{el_type}(arrays, length(first(arrays)))

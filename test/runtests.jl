@@ -32,7 +32,6 @@ function test_collection(
     @test arr[collect(idxs)] == source[collect(idxs)]
     @test collect(arr) == source
     @test eltype(arr) == T
-    # @show collect(arr)
     @test map(identity, iterable(arr)) == source
     @test mapreduce(identity, (a, b) -> b, iterable(arr)) == source[end]
     if T <: Real
