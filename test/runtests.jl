@@ -416,6 +416,36 @@ end
 
 end
 
+@testset "destination name validation" begin
+
+    h5open("$out_dir/destination_name_validation.h5", "w") do fid
+
+        # Destination names must be strings regardless of the selected storage style.
+        cases = (
+            (:elemental_name, Int64, Int64[1]),
+            (:composite_name, MyType, [MyType(1, 2.0)]),
+            (
+                :serialized_name,
+                MySerializingType,
+                [MySerializingType("value", [1.0], MyType(2, 3.0))],
+            ),
+        )
+        for (name, el_type, source) in cases
+            @test_throws MethodError create_hdf5_vector(fid["/"], name, el_type)
+            @test_throws MethodError copy_to_hdf5_vector(fid["/"], name, source)
+            @test !haskey(fid, string(name))
+        end
+
+        # The contract accepts AbstractString implementations rather than only String.
+        full_name = "substring_name_suffix"
+        name = SubString(full_name, 1, 14)
+        copied = copy_to_hdf5_vector(fid["/"], name, Int64[1, 2])
+        @test collect(copied) == [1, 2]
+
+    end
+
+end
+
 @testset "array-like element validation" begin
 
     h5open("$out_dir/arrayish_element_validation.h5", "w") do fid

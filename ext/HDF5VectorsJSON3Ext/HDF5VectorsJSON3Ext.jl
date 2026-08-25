@@ -15,8 +15,15 @@ import HDF5Vectors
 mutable struct HDF5VectorWithJSONStorage{T} <: HDF5Vectors.AbstractHDF5Vector{T}
     storage::HDF5Vectors.HDF5VectorOfElementalTypes{String, String}
 end
-function HDF5Vectors.create_hdf5_vector(style::HDF5Vectors.JSONStorageStyle, group, name, el_type; portable, kwargs...)
-    this_group = HDF5.create_group(group, string(name))
+function HDF5Vectors.create_hdf5_vector(
+    style::HDF5Vectors.JSONStorageStyle,
+    group,
+    name::AbstractString,
+    el_type;
+    portable,
+    kwargs...,
+)
+    this_group = HDF5.create_group(group, name)
     HDF5Vectors.store_metadata(style, this_group, el_type; portable)
     data_group = HDF5.create_group(this_group, "data")
     return HDF5VectorWithJSONStorage{el_type}(
