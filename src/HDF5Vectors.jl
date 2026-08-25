@@ -978,6 +978,7 @@ mutable struct HDF5VectorWithByteArrayStorage{T} <: AbstractHDF5Vector{T}
     stops::HDF5VectorOfElementalTypes{Int64, Int64}
     # We could add the IOBuffer here and always use the same one.
 end
+
 function create_hdf5_vector(style::ByteArrayStorageStyle, group, name, el_type; portable, kwargs...)
     this_group = create_group(group, string(name))
     store_metadata(style, this_group, el_type; portable)
@@ -1023,17 +1024,34 @@ function copy_to_hdf5_vector(
 end
 
 function load_hdf5_vector(
-    style::ByteArrayStorageStyle,
+    ::ByteArrayStorageStyle,
     group::HDF5.Group,
     el_type;
     kwargs...,
 )
-    return HDF5VectorWithByteArrayStorage{el_type}(
-        load_hdf5_vector(group["data"]["bytes"], UInt8),
-        load_hdf5_vector(group["data"]["stops"], Int64),
-    )
+    storage = load_hdf5_vector(group["data"]["bytes"], UInt8)
+    stops = load_hdf5_vector(group["data"]["stops"], Int64)
+    byte_count = length(storage)
+    if isempty(stops)
+        if !iszero(byte_count)
+            throw(DimensionMismatch(
+                "Serialized storage contains $byte_count bytes but no element stops.",
+            ))
+        end
+    else
+        final_stop = stops[end]
+        if final_stop != byte_count
+            throw(DimensionMismatch(
+                "The final serialized element stop is $final_stop, but the byte storage " *
+                "contains $byte_count bytes.",
+            ))
+        end
+    end
+    return HDF5VectorWithByteArrayStorage{el_type}(storage, stops)
 end
+
 Base.length(arr::HDF5VectorWithByteArrayStorage) = length(arr.stops)
+
 function Base.push!(arr::HDF5VectorWithByteArrayStorage{T}, el::T) where {T}
     io = IOBuffer()
     Serialization.serialize(io, el)
@@ -1047,11 +1065,13 @@ function Base.push!(arr::HDF5VectorWithByteArrayStorage{T}, el::T) where {T}
     push!(arr.stops, stop)
     return arr
 end
+
 function Base.setindex!(arr::HDF5VectorWithByteArrayStorage, el, k)
     # To implement this, we'd need to completely redo the byte array and all of the stops.
     # Let's just not support this for serialized types.
     error("setindex! is not supported for HDF5VectorWithByteArrayStorage.")
 end
+
 function deserialize_from_vector!(io, byte_array::Vector{UInt8}, start, stop)
     seekstart(io)
     for k in start : stop
@@ -1060,12 +1080,14 @@ function deserialize_from_vector!(io, byte_array::Vector{UInt8}, start, stop)
     seekstart(io)
     Serialization.deserialize(io) # This reads everything, resetting the buffer.
 end
+
 function Base.getindex(arr::HDF5VectorWithByteArrayStorage{T}, k::Int) where {T}
     stop = arr.stops[k]
     start = k == 1 ? 1 : arr.stops[k-1] + 1
     range = Int64(start) : Int64(stop)
     return Serialization.deserialize(IOBuffer(read(arr.storage.dataset, UInt8, range)))
 end
+
 function Base.collect(arr::HDF5VectorWithByteArrayStorage{T}) where {T}
     data = collect(arr.storage)
     stops = collect(arr.stops)
@@ -1137,7 +1159,7 @@ function copy_to_hdf5_vector(
 end
 
 function load_hdf5_vector(
-    style::CompositeStorageStyle,
+    ::CompositeStorageStyle,
     group::HDF5.Group,
     el_type;
     kwargs...,
@@ -1146,11 +1168,17 @@ function load_hdf5_vector(
         load_hdf5_vector(group["data"][string(fn)], ft)
         for (fn, ft) in zip(fieldnames(el_type), fieldtypes(el_type))
     ]
-    if isempty(arrays)
-        return HDF5VectorOfCompositeTypes{el_type}(arrays, 0)
-    else
-        return HDF5VectorOfCompositeTypes{el_type}(arrays, length(first(arrays)))
+    count = isempty(arrays) ? 0 : length(first(arrays))
+    for (field_name, array) in zip(fieldnames(el_type), arrays)
+        field_count = length(array)
+        if field_count != count
+            throw(DimensionMismatch(
+                "Composite storage for $el_type contains $field_count values for field " *
+                "$field_name, but there are only arrays for $count values.",
+            ))
+        end
     end
+    return HDF5VectorOfCompositeTypes{el_type}(arrays, count)
 end
 
 Base.length(arr::HDF5VectorOfCompositeTypes) = arr.count
@@ -1160,7 +1188,6 @@ function supports_setindex(arr::HDF5VectorOfCompositeTypes)
 end
 
 function Base.setindex!(arr::HDF5VectorOfCompositeTypes{T}, el::T, k::Int) where {T}
-
     checkbounds(arr, k)
     if !supports_setindex(arr)
         throw(ArgumentError(
@@ -1168,12 +1195,10 @@ function Base.setindex!(arr::HDF5VectorOfCompositeTypes{T}, el::T, k::Int) where
             "append-only storage.",
         ))
     end
-
     for (sub_array, fn) in zip(arr.arrays, fieldnames(T))
         setindex!(sub_array, getproperty(el, fn), k)
     end
     return el
-
 end
 
 function Base.push!(arr::HDF5VectorOfCompositeTypes{T}, el::T) where {T}

@@ -466,6 +466,42 @@ end
 
 end
 
+@testset "multi-dataset load validation" begin
+
+    h5open("$out_dir/multi_dataset_load_validation.h5", "w") do fid
+
+        # Every field of a composite vector must contain the same number of values.
+        composite_source = [MyType(1, 2.0), MyType(3, 4.0)]
+        copy_to_hdf5_vector(fid["/"], "invalid_composite", composite_source)
+        second_field_dataset = fid["invalid_composite"]["data"]["b"]["data"]
+        HDF5.set_extent_dims(second_field_dataset, (1,))
+        @test_throws DimensionMismatch load_hdf5_vector(fid["invalid_composite"])
+
+        # The final serialized stop must coincide with the end of the byte dataset.
+        serialized_source = [
+            MySerializingType("first", [1.0], MyType(2, 3.0)),
+        ]
+        copy_to_hdf5_vector(fid["/"], "invalid_serialized", serialized_source)
+        serialized_bytes = fid["invalid_serialized"]["data"]["bytes"]["data"]
+        HDF5.set_extent_dims(serialized_bytes, (length(serialized_bytes) + 1,))
+        serialized_bytes[end] = 0x00
+        @test_throws DimensionMismatch load_hdf5_vector(fid["invalid_serialized"])
+
+        # Empty serialized storage must not contain bytes without a corresponding stop.
+        copy_to_hdf5_vector(
+            fid["/"],
+            "invalid_empty_serialized",
+            MySerializingType[],
+        )
+        empty_bytes = fid["invalid_empty_serialized"]["data"]["bytes"]["data"]
+        HDF5.set_extent_dims(empty_bytes, (1,))
+        empty_bytes[1] = 0x00
+        @test_throws DimensionMismatch load_hdf5_vector(fid["invalid_empty_serialized"])
+
+    end
+
+end
+
 @testset "setindex! storage support" begin
 
     h5open("$out_dir/setindex_support.h5", "w") do fid
