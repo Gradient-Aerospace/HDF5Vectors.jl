@@ -25,7 +25,7 @@ function HDF5Vectors.create_hdf5_vector(style::HDF5Vectors.JSONStorageStyle, gro
 end
 function HDF5Vectors.load_hdf5_vector(style::HDF5Vectors.JSONStorageStyle, group_or_dataset, el_type; kwargs...)
     return HDF5VectorWithJSONStorage{el_type}(
-        HDF5Vectors.load_hdf5_vector(group_or_dataset["data"]["json"], String; kwargs...),
+        HDF5Vectors.load_hdf5_vector(group_or_dataset["data"]["json"], String),
     )
 end
 Base.length(arr::HDF5VectorWithJSONStorage) = length(arr.storage)

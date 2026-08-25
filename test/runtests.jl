@@ -60,9 +60,9 @@ function test_collection(
     arr3 = load_hdf5_vector(fid[name])
     @test collect(arr3) == source
 
-    # Load again, this time specifying the element type explicitly. We'll need to forward
-    # the same kwargs that we used when creating the vector.
-    arr4 = load_hdf5_vector(fid[name], T; create_kwargs...)
+    # Load again, this time specifying the element type explicitly. The storage options
+    # should still come from the metadata rather than needing to be repeated by the caller.
+    arr4 = load_hdf5_vector(fid[name], T)
     @test collect(arr4) == source
 
     # Now test that we can continue writing to the HDF5 vector.

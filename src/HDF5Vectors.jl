@@ -485,35 +485,52 @@ function create_hdf5_vector(
     )
 end
 
+function read_storage_options(metadata_group::HDF5.Group)
+    dimensions_are_constant = read(metadata_group["dimensions_are_constant"])
+    dims = dimensions_are_constant ? (read(metadata_group["dimensions"])...,) : nothing
+    portable = read(metadata_group["portable"])
+    return (; dims, portable)
+end
+
 """
-    load_hdf5_vector(group; kwargs...)
+    load_hdf5_vector(group::HDF5.Group)
 
 Reconstruct an HDF5 vector from a group created by `create_hdf5_vector`.  The
 metadata stored in the group (type, dimensions, portability) is used to determine
 which specific vector implementation to instantiate.  This form takes only the
-`group` and pulls the element type from the metadata; the optional keyword
-arguments are forwarded to `storage_style` and to the underlying loader.
+`group` and pulls the element type from the metadata.
 """
-function load_hdf5_vector(group; kwargs...)
+function load_hdf5_vector(group::HDF5.Group)
     metadata_group = group["metadata"]
     el_type = deserialize_from_byte_array(read(metadata_group["serialized_type"]))
-    dimensions_are_constant = read(metadata_group["dimensions_are_constant"])
-    dims = dimensions_are_constant ? (read(metadata_group["dimensions"])...,) : nothing
-    portable = read(metadata_group["portable"])
-    return load_hdf5_vector(storage_style(el_type; dims, portable, kwargs...), group, el_type; dims, portable, kwargs...)
+    options = read_storage_options(metadata_group)
+    return load_hdf5_vector(
+        storage_style(el_type; options...),
+        group,
+        el_type;
+        options...,
+    )
 end
 
 """
-    load_hdf5_vector(group_or_dataset, el_type; kwargs...)
+    load_hdf5_vector(group::HDF5.Group, el_type)
 
-Reconstruct an HDF5 vector when the caller already knows the element type.
-This overload is primarily used when loading a dataset directly (rather than the
-parent group) or when the metadata does not reside in the expectation of the
-vector type.  The element type is passed explicitly and used to select the
-storage style; the remainder of the arguments is forwarded.
+Reconstruct an HDF5 vector when the caller already knows the element type. When loading a
+group created by `create_hdf5_vector`, its stored dimensions and portability setting are
+used to select the storage representation.
 """
-function load_hdf5_vector(group_or_dataset, el_type; kwargs...)
-    return load_hdf5_vector(storage_style(el_type; kwargs...), group_or_dataset, el_type; kwargs...)
+function load_hdf5_vector(group::HDF5.Group, el_type)
+    options = read_storage_options(group["metadata"])
+    return load_hdf5_vector(
+        storage_style(el_type; options...),
+        group,
+        el_type;
+        options...,
+    )
+end
+
+function load_hdf5_vector(dataset::HDF5.Dataset, el_type; kwargs...)
+    return load_hdf5_vector(storage_style(el_type; kwargs...), dataset, el_type; kwargs...)
 end
 
 """
@@ -963,8 +980,8 @@ end
 function load_hdf5_vector(style::ByteArrayStorageStyle, group_or_dataset, el_type; kwargs...)
     this_group = group_or_dataset
     return HDF5VectorWithByteArrayStorage{el_type}(
-        load_hdf5_vector(this_group["data"]["bytes"], UInt8; kwargs...),
-        load_hdf5_vector(this_group["data"]["stops"], Int64; kwargs...),
+        load_hdf5_vector(this_group["data"]["bytes"], UInt8),
+        load_hdf5_vector(this_group["data"]["stops"], Int64),
     )
 end
 Base.length(arr::HDF5VectorWithByteArrayStorage) = length(arr.stops)
@@ -1073,7 +1090,7 @@ end
 function load_hdf5_vector(style::CompositeStorageStyle, group_or_dataset, el_type; kwargs...)
     this_group = group_or_dataset
     arrays = [
-        load_hdf5_vector(this_group["data"][string(fn)], ft; kwargs...)
+        load_hdf5_vector(this_group["data"][string(fn)], ft)
         for (fn, ft) in zip(fieldnames(el_type), fieldtypes(el_type))
     ]
     if isempty(arrays)
