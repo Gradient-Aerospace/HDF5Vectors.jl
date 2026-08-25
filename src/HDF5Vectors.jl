@@ -987,7 +987,41 @@ function create_hdf5_vector(style::ByteArrayStorageStyle, group, name, el_type; 
         create_hdf5_vector(data_group, "stops", Int64; kwargs...),
     )
 end
-# We'll use the generic copy_to_hdf5_vector.
+
+function copy_to_hdf5_vector(
+    style::ByteArrayStorageStyle,
+    group,
+    name,
+    collection;
+    chunk_length,
+    portable,
+    kwargs...,
+)
+
+    # Serialize the full collection before changing the HDF5 file. Each call to serialize
+    # writes an independently deserializable value into the shared byte buffer.
+    io = IOBuffer()
+    stops = Int64[]
+    sizehint!(stops, length(collection))
+    for el in collection
+        Serialization.serialize(io, el)
+        push!(stops, Int64(position(io)))
+    end
+    bytes = take!(io)
+
+    # Store the concatenated bytes and cumulative end positions using the elemental bulk
+    # copy path rather than pushing each byte and stop individually.
+    el_type = eltype(collection)
+    this_group = create_group(group, string(name))
+    store_metadata(style, this_group, el_type; portable)
+    data_group = create_group(this_group, "data")
+    return HDF5VectorWithByteArrayStorage{el_type}(
+        copy_to_hdf5_vector(data_group, "bytes", bytes; chunk_length),
+        copy_to_hdf5_vector(data_group, "stops", stops; chunk_length),
+    )
+
+end
+
 function load_hdf5_vector(
     style::ByteArrayStorageStyle,
     group::HDF5.Group,

@@ -510,6 +510,32 @@ end
         test_collection(fid, "serializing_types", serializing_types)
         test_collection(fid, "json_types", json_types)
 
+        # The optimized serialization copy stores all serialized values in one byte vector
+        # and records the cumulative end position of each value.
+        serialized_values = HDF5Vectors.serialize_to_byte_array.(serializing_types)
+        expected_bytes = reduce(vcat, serialized_values)
+        expected_stops = cumsum(Int64[length(bytes) for bytes in serialized_values])
+        serialized_data_group = fid["serializing_types-copy"]["data"]
+        @test read(serialized_data_group["bytes"]["data"]) == expected_bytes
+        @test read(serialized_data_group["stops"]["data"]) == expected_stops
+
+        # Empty collections must also produce valid, reloadable byte-array storage.
+        empty_copy = copy_to_hdf5_vector(
+            fid["/"],
+            "empty_serializing_types",
+            MySerializingType[],
+        )
+        @test isempty(empty_copy)
+        empty_data_group = fid["empty_serializing_types"]["data"]
+        @test isempty(read(empty_data_group["bytes"]["data"]))
+        @test isempty(read(empty_data_group["stops"]["data"]))
+
+        reloaded_empty_copy = load_hdf5_vector(fid["empty_serializing_types"])
+        @test isempty(reloaded_empty_copy)
+        first_value = MySerializingType("first", [1.0], MyType(2, 3.0))
+        push!(reloaded_empty_copy, first_value)
+        @test collect(reloaded_empty_copy) == [first_value]
+
     end
 
 end
