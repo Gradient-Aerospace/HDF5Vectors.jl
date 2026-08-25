@@ -17,7 +17,7 @@ mutable struct HDF5VectorWithJSONStorage{T} <: HDF5Vectors.AbstractHDF5Vector{T}
 end
 function HDF5Vectors.create_hdf5_vector(
     style::HDF5Vectors.JSONStorageStyle,
-    group,
+    group::HDF5.Group,
     name::AbstractString,
     el_type;
     portable,

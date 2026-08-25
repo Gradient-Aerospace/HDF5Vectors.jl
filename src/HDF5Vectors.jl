@@ -457,7 +457,7 @@ end
 
 """
     create_hdf5_vector(
-        group,
+        group::HDF5.Group,
         name::AbstractString,
         el_type;
         dims = nothing,
@@ -481,7 +481,7 @@ Optional keyword arguments:
   only one supported representation and does not make Julia-serialized data portable.
 """
 function create_hdf5_vector(
-    group, name::AbstractString, el_type;
+    group::HDF5.Group, name::AbstractString, el_type;
     dims = nothing, chunk_length = 1000, portable = true,
 )
     chunk_length = validate_chunk_length(chunk_length)
@@ -538,7 +538,7 @@ end
 
 """
     copy_to_hdf5_vector(
-        group,
+        group::HDF5.Group,
         name::AbstractString,
         collection;
         dims = nothing,
@@ -563,7 +563,7 @@ Optional keyword arguments:
   only one supported representation and does not make Julia-serialized data portable.
 """
 function copy_to_hdf5_vector(
-    group, name::AbstractString, collection;
+    group::HDF5.Group, name::AbstractString, collection;
     dims = nothing, chunk_length = 1000, portable = true,
 )
     chunk_length = validate_chunk_length(chunk_length)
@@ -579,7 +579,7 @@ end
 # faster anyway, so it's a useful default method.
 function copy_to_hdf5_vector(
     style::AbstractHDF5VectorStorageStyle,
-    group,
+    group::HDF5.Group,
     name::AbstractString,
     collection;
     kwargs...,
@@ -592,7 +592,13 @@ function copy_to_hdf5_vector(
 end
 
 """
-    create_hdf5_vector(style, group, name::AbstractString, el_type; kwargs...)
+    create_hdf5_vector(
+        style::AbstractHDF5VectorStorageStyle,
+        group::HDF5.Group,
+        name::AbstractString,
+        el_type;
+        kwargs...,
+    )
 
 Creates the appropriate HDF5 vector type for the given storage style and element type,
 storing the vector in the given HDF5 `group` under `name`. This is an
@@ -601,7 +607,7 @@ implementation hook for storage backends; users should select a style by definin
 """
 function create_hdf5_vector(
     style::AbstractHDF5VectorStorageStyle,
-    group,
+    group::HDF5.Group,
     name::AbstractString,
     el_type;
     kwargs...,
@@ -626,7 +632,7 @@ end
 
 function create_hdf5_vector(
     style::ElementalStorageStyle,
-    group,
+    group::HDF5.Group,
     name::AbstractString,
     el_type;
     chunk_length,
@@ -647,7 +653,7 @@ end
 # saving it element-by-element.
 function copy_to_hdf5_vector(
     style::ElementalStorageStyle,
-    group,
+    group::HDF5.Group,
     name::AbstractString,
     collection;
     chunk_length,
@@ -744,7 +750,7 @@ end
 
 function create_hdf5_vector(
     style::SingletonStorageStyle,
-    group,
+    group::HDF5.Group,
     name::AbstractString,
     el_type;
     chunk_length,
@@ -767,7 +773,7 @@ end
 
 function copy_to_hdf5_vector(
     style::SingletonStorageStyle,
-    group,
+    group::HDF5.Group,
     name::AbstractString,
     collection;
     chunk_length,
@@ -857,7 +863,7 @@ end
 
 function create_hdf5_vector(
     style::ArrayStorageStyle,
-    group,
+    group::HDF5.Group,
     name::AbstractString,
     arrayish_el_type;
     chunk_length,
@@ -877,7 +883,7 @@ end
 
 function copy_to_hdf5_vector(
     style::ArrayStorageStyle,
-    group,
+    group::HDF5.Group,
     name::AbstractString,
     collection;
     chunk_length,
@@ -1026,7 +1032,7 @@ end
 
 function create_hdf5_vector(
     style::ByteArrayStorageStyle,
-    group,
+    group::HDF5.Group,
     name::AbstractString,
     el_type;
     portable,
@@ -1043,7 +1049,7 @@ end
 
 function copy_to_hdf5_vector(
     style::ByteArrayStorageStyle,
-    group,
+    group::HDF5.Group,
     name::AbstractString,
     collection;
     chunk_length,
@@ -1161,7 +1167,7 @@ end
 
 function create_hdf5_vector(
     style::CompositeStorageStyle,
-    group,
+    group::HDF5.Group,
     name::AbstractString,
     el_type::Type{T};
     chunk_length,
@@ -1187,7 +1193,7 @@ end
 
 function copy_to_hdf5_vector(
     style::CompositeStorageStyle,
-    group,
+    group::HDF5.Group,
     name::AbstractString,
     collection;
     chunk_length,

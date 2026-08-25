@@ -416,9 +416,14 @@ end
 
 end
 
-@testset "destination name validation" begin
+@testset "destination validation" begin
 
-    h5open("$out_dir/destination_name_validation.h5", "w") do fid
+    h5open("$out_dir/destination_validation.h5", "w") do fid
+
+        # The destination must be an HDF5 group, including when writing at the file root.
+        @test_throws MethodError create_hdf5_vector(fid, "file_parent", Int64)
+        @test_throws MethodError copy_to_hdf5_vector(fid, "file_parent", Int64[1])
+        @test !haskey(fid, "file_parent")
 
         # Destination names must be strings regardless of the selected storage style.
         cases = (
