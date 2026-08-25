@@ -126,9 +126,10 @@ is loaded. A custom `storage_style` method must therefore make a consistent choi
 those inputs. The style-taking storage methods are implementation hooks, not per-vector
 overrides for selecting a different representation.
 
-Array storage results in HDF5 files where the dataset has the dimensions of each element,
-plus one added dimension. For instance, if each element to be stored is an m-by-n array,
-then the HDF5 file will contain an m-by-n-by-p array, where element `k` is `[:, :, k]`.
+HDF5.jl presents an array-storage dataset with the dimensions of each element plus one
+added dimension. For instance, if each element is an m-by-n array, Julia sees an
+m-by-n-by-p dataset, where element `k` is `[:, :, k]`. A row-major reader sees the raw HDF5
+dimensions in reverse order: p-by-n-by-m.
 
 Structs can be stored in a "portable" way. For a struct defined as:
 
@@ -142,8 +143,8 @@ end
 the resulting HDF5 file would look like so:
 
 ```
-/my_group/my_vector/data/a # a 1D array of Int64
-/my_group/my_vector/data/b # a 1D array of Float64
+/my_group/my_vector/data/a/data # a 1D dataset of Int64
+/my_group/my_vector/data/b/data # a 1D dataset of Float64
 ```
 
 This format is called "portable" because it is easy to interpret this dataset outside of
