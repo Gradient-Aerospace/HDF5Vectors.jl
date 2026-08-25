@@ -153,7 +153,9 @@ mkpath("out")
 end
 
 @testset "array types (portable = $portable)" for portable in (true, false)
+
     h5open("$out_dir/array_types.h5", "w") do fid
+
         test_collection(fid, "ntuples_of_ints", [(k, 2k) for k in 1:11])
         test_collection(fid, "svectors_of_floats", [SA_F64[k, 2k, 3k] for k in 1:12])
         test_collection(fid, "smatrices_of_floats", [SA_F64[k 2k; 3k 4k] for k in 1:12])
@@ -164,7 +166,59 @@ end
         test_collection(fid, "matrices_of_floats_no_dims", [Float64[k 2k; 3k 4k] for k in 1:12])
         test_collection(fid, "ntuples_of_symbols", [(:a, :b) for k in 1:3])
         test_collection(fid, "svectors_of_symbols", [SVector{2, Symbol}(:a, :b) for k in 1:2])
+
+        # Array-like storage must apply the scalar representation of transformed elemental
+        # types such as Char and Enum to every element.
+        test_collection(fid, "ntuples_of_chars", [('a', 'b'), ('c', 'd')])
+        test_collection(fid, "svectors_of_enums", [
+            SVector(uint8_zero, uint8_max),
+            SVector(uint8_max, uint8_zero),
+        ])
+        test_collection(fid, "smatrices_of_chars", [
+            SMatrix{2, 2, Char, 4}(('a', 'b', 'c', 'd')),
+            SMatrix{2, 2, Char, 4}(('e', 'f', 'g', 'h')),
+        ])
+        test_collection(fid, "sarrays_of_enums", [
+            SArray{Tuple{2, 1, 2}, UInt8Values, 3, 4}(
+                (uint8_zero, uint8_max, uint8_max, uint8_zero),
+            ),
+            SArray{Tuple{2, 1, 2}, UInt8Values, 3, 4}(
+                (uint8_max, uint8_zero, uint8_zero, uint8_max),
+            ),
+        ])
+        test_collection(
+            fid,
+            "vectors_of_chars",
+            [collect("ab"), collect("cd")];
+            create_kwargs = (; dims = (2,), ),
+        )
+        test_collection(
+            fid,
+            "matrices_of_enums",
+            [
+                reshape(
+                    UInt8Values[uint8_zero, uint8_max, uint8_max, uint8_zero],
+                    2,
+                    2,
+                ),
+                reshape(
+                    UInt8Values[uint8_max, uint8_zero, uint8_zero, uint8_max],
+                    2,
+                    2,
+                ),
+            ];
+            create_kwargs = (; dims = (2, 2), ),
+        )
+
+        @test eltype(read(fid["ntuples_of_chars"]["data"])) === Int32
+        @test eltype(read(fid["svectors_of_enums"]["data"])) === UInt8
+        @test eltype(read(fid["smatrices_of_chars"]["data"])) === Int32
+        @test eltype(read(fid["sarrays_of_enums"]["data"])) === UInt8
+        @test eltype(read(fid["vectors_of_chars"]["data"])) === Int32
+        @test eltype(read(fid["matrices_of_enums"]["data"])) === UInt8
+
     end
+
 end
 
 @testset "singleton types (portable = $portable)" for portable in (true, false)

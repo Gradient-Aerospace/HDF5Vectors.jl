@@ -29,7 +29,7 @@ module HDF5Vectors
 export AbstractHDF5Vector, create_hdf5_vector, load_hdf5_vector, copy_to_hdf5_vector, iterable
 
 using HDF5
-using StaticArrays: SVector
+using StaticArrays: StaticArray, SVector
 
 # See https://juliaio.github.io/HDF5.jl/stable/#Supported-data-types
 const hdf5_scalar_types = Union{Bool, UInt8, Int8, UInt16, Int16, UInt32, Int32, UInt64, Int64, Float32, Float64}
@@ -672,8 +672,9 @@ function Base.push!(arr::HDF5VectorOfElementalTypes{T}, el::T) where {T}
     return arr
 end
 
-function is_elemental(type; kwargs...)
-    return isa(storage_style(type; kwargs...), ElementalStorageStyle)
+function array_element_datatype(type; kwargs...)
+    style = storage_style(type; kwargs...)
+    return style isa ElementalStorageStyle ? style.datatype : nothing
 end
 
 ##############################
@@ -786,7 +787,17 @@ struct ArrayStorageStyle{HT, ND} <: AbstractHDF5VectorStorageStyle
     dims::NTuple{ND, Int64}
 end
 
-# N is Tuple{D1, D2, D3...}, a Tuple type whose type parameters are "value types".
+function fixed_array_storage_style(element_type, dims; kwargs...)
+    datatype = array_element_datatype(element_type; kwargs...)
+    if isnothing(datatype)
+        return CompositeStorageStyle()
+    end
+    return ArrayStorageStyle(datatype, dims)
+end
+
+# Here, T is the eltype of the arrays that we're collecting. D is a tupel whose "field
+# types" are the dimensionis, like Tuple{D1, D2, D3...} (there are "value types"). DT is the
+# HDF5 datatype being used for storage.
 mutable struct HDF5VectorOfArrayishTypes{T, D, DT} <: AbstractHDF5Vector{T}
     dataset::HDF5.Dataset
     datatype::Type{DT}
@@ -846,9 +857,34 @@ end
 @inline colons(D) = Tuple(Colon() for _ in fieldtypes(D))
 
 Base.length(arr::HDF5VectorOfArrayishTypes) = arr.count
+
 supports_setindex(::HDF5VectorOfArrayishTypes) = true
 
 validate_arrayish_element(::HDF5VectorOfArrayishTypes{T}, ::T) where {T} = nothing
+
+@inline function construct_arrayish_elements(
+    type::Type{HDF5VectorOfArrayishTypes{T, D, DT}},
+    elements,
+) where {T, D, DT}
+    element_type = eltype(T)
+    if element_type === DT
+        return elements
+    end
+    elemental_vector_type = HDF5VectorOfElementalTypes{element_type, DT}
+    return map(el -> construct(elemental_vector_type, el), elements)
+end
+
+@inline function deconstruct_arrayish_elements(
+    type::Type{HDF5VectorOfArrayishTypes{T, D, DT}},
+    elements,
+) where {T, D, DT}
+    element_type = eltype(T)
+    if element_type === DT
+        return elements
+    end
+    elemental_vector_type = HDF5VectorOfElementalTypes{element_type, DT}
+    return map(el -> deconstruct(elemental_vector_type, el), elements)
+end
 
 function validate_arrayish_element(
     arr::HDF5VectorOfArrayishTypes{T, D},
@@ -871,15 +907,18 @@ function Base.setindex!(arr::HDF5VectorOfArrayishTypes{T, D}, el::T, k::Int) whe
     arr.dataset[colons(D)..., k] = deconstruct(typeof(arr), el)
     return el
 end
+
 function Base.getindex(arr::HDF5VectorOfArrayishTypes{T, D, DT}, k::Int) where {T, D, DT}
     construct(typeof(arr), read(arr.dataset, DT, colons(D)..., k))
 end
+
 function copy_each_frame_and_construct!(arr, collected::Vector{T}, data::Array{ET, N}, n) where {T, ET, N}
     for k in 1:n
         v = view(data, (Colon() for _ in 1:N-1)..., k) # view seems to allocate for matrices and above.
         collected[k] = construct(typeof(arr), v)
     end
 end
+
 function Base.collect(arr::HDF5VectorOfArrayishTypes{T, D, DT}) where {T, D, DT}
     data = read(arr.dataset, DT, colons(D)..., 1:arr.count)
     collected = Vector{T}(undef, arr.count)
@@ -1122,10 +1161,9 @@ deconstruct(::Type{HDF5VectorOfElementalTypes{T, DT}}, el::T) where {T, DT} = el
 # String #
 ##########
 
-# Strings use the ElementalStorageStyle under the hood, but they aren't really "elemental"
-# types (you can make an array of tuples of them), so we have to call that out directly
-# here.
-is_elemental(type::Type{String}; kwargs...) = false
+# Strings use ElementalStorageStyle as scalar values, but this package does not store them
+# as scalar elements of multidimensional array-like datasets.
+array_element_datatype(::Type{String}; kwargs...) = nothing
 storage_style(el_type::Type{String}; kwargs...) = ElementalStorageStyle(el_type)
 construct(::Type{HDF5VectorOfElementalTypes{String, DT}}, el::String) where {DT} = el
 deconstruct(::Type{HDF5VectorOfElementalTypes{String, DT}}, el::String) where {DT} = el
@@ -1142,7 +1180,7 @@ deconstruct(::Type{HDF5VectorOfElementalTypes{Char, DT}}, el::Char) where {DT} =
 # Symbol #
 ##########
 
-is_elemental(type::Type{Symbol}; kwargs...) = false # Same as for strings.
+array_element_datatype(::Type{Symbol}; kwargs...) = nothing # Same as for strings.
 storage_style(el_type::Type{Symbol}; kwargs...) = ElementalStorageStyle(String)
 construct(::Type{HDF5VectorOfElementalTypes{Symbol, DT}}, el::String) where {DT} = Symbol(el)
 deconstruct(::Type{HDF5VectorOfElementalTypes{Symbol, DT}}, el::Symbol) where {DT} = string(el)
@@ -1177,18 +1215,18 @@ function storage_style(t::Type{Tuple{}}; dims = nothing, kwargs...)
 end
 function storage_style(t::Type{NTuple{N, T}}; dims = nothing, kwargs...) where {N, T}
     validate_fixed_dims(dims, (N,))
-    if is_elemental(T; kwargs...)
-        return ArrayStorageStyle(T, (N,))
-    else
-        return CompositeStorageStyle()
-    end
+    return fixed_array_storage_style(T, (N,); kwargs...)
 end
 
 # By constructing explicitly from 1:N, this is all known at compile time, so this doesn't
 # allocate.
 function construct(::Type{HDF5VectorOfArrayishTypes{T, D, DT}}, elements) where {T <: NTuple, D, DT}
     N = fieldtype(D, 1)
-    return ((elements[i] for i in 1:N)...,)
+    converted_elements = construct_arrayish_elements(
+        HDF5VectorOfArrayishTypes{T, D, DT},
+        elements,
+    )
+    return ((converted_elements[i] for i in 1:N)...,)
 end
 function construct(::Type{HDF5VectorOfCompositeTypes{T}}, elements) where {T <: NTuple}
     return elements # Already a tuple.
@@ -1196,8 +1234,12 @@ end
 
 # We use an SVector here because the HDF5 library doesn't know how to take an NTuple as if
 # it were a vector.
-function deconstruct(::Type{<:HDF5VectorOfArrayishTypes}, el::NTuple{N, ET}) where {N, ET}
-    return SVector{N, ET}(el...,)
+function deconstruct(
+    type::Type{HDF5VectorOfArrayishTypes{T, D, DT}},
+    el::T,
+) where {N, ET, T <: NTuple{N, ET}, D, DT}
+    elements = deconstruct_arrayish_elements(type, el)
+    return SVector{N, DT}(elements)
 end
 function deconstruct(::Type{HDF5VectorOfCompositeTypes{T}}, el) where {T <: NTuple}
     return el # Already a tuple.
@@ -1212,15 +1254,45 @@ end
 # ArrayStorageStyle. See if the eltype of the Array shold use the elemental style.
 function storage_style(::Type{<:Array{T, N}}; dims = nothing, kwargs...) where {T, N}
     dims = validate_dims(dims, N)
-    if !isnothing(dims) && is_elemental(T; kwargs...)
-        return ArrayStorageStyle(T, dims)
-    else
-        return ByteArrayStorageStyle() # We don't otherwise know how to store this.
+    if !isnothing(dims)
+        datatype = array_element_datatype(T; kwargs...)
+        if !isnothing(datatype)
+            return ArrayStorageStyle(datatype, dims)
+        end
     end
+    return ByteArrayStorageStyle() # We don't otherwise know how to store this.
 end
 
-construct(::Type{HDF5VectorOfArrayishTypes{T, D, DT}}, el) where {T <: Array, D, DT} = collect(el)
-deconstruct(::Type{HDF5VectorOfArrayishTypes{T, D, DT}}, el) where {T <: Array, D, DT} = el
+function construct(
+    type::Type{HDF5VectorOfArrayishTypes{T, D, DT}},
+    elements,
+) where {T <: Array, D, DT}
+    elements = construct_arrayish_elements(type, elements)
+    return elements isa T ? elements : collect(elements)
+end
+function deconstruct(
+    type::Type{HDF5VectorOfArrayishTypes{T, D, DT}},
+    el::T,
+) where {T <: Array, D, DT}
+    return deconstruct_arrayish_elements(type, el)
+end
+
+# Static arrays share their array-like and composite conversions. Their storage-style
+# methods remain separate because their dimensions have different type representations.
+function construct(
+    type::Type{HDF5VectorOfArrayishTypes{T, D, DT}},
+    elements,
+) where {T <: StaticArray, D, DT}
+    return T(construct_arrayish_elements(type, elements))
+end
+function deconstruct(
+    type::Type{HDF5VectorOfArrayishTypes{T, D, DT}},
+    el::T,
+) where {T <: StaticArray, D, DT}
+    return deconstruct_arrayish_elements(type, el)
+end
+construct(::Type{HDF5VectorOfCompositeTypes{T}}, el) where {T <: StaticArray} = T(el...)
+deconstruct(::Type{HDF5VectorOfCompositeTypes{T}}, el) where {T <: StaticArray} = (el.data,)
 
 ###########
 # SVector #
@@ -1230,21 +1302,9 @@ function storage_style(t::Type{SVector{N, T}}; dims = nothing, kwargs...) where 
     validate_fixed_dims(dims, (N,))
     if N == 0
         return SingletonStorageStyle()
-    elseif is_elemental(T; kwargs...)
-        return ArrayStorageStyle(T, (N,))
-    else
-        return CompositeStorageStyle()
     end
+    return fixed_array_storage_style(T, (N,); kwargs...)
 end
-
-construct(::Type{HDF5VectorOfArrayishTypes{T, D, DT}}, el) where {T <: SVector, D, DT} = T(el)
-deconstruct(::Type{HDF5VectorOfArrayishTypes{T, D, DT}}, el::SVector) where {T <: SVector, D, DT} = el
-
-# When these are composite, we treat them like normal composite types. They have a `data`
-# field, and we log that one field, letting the type of the `data` field break down like
-# any other composite type.
-construct(::Type{HDF5VectorOfCompositeTypes{T}}, el) where {T <: SVector} = T(el...)
-deconstruct(::Type{HDF5VectorOfCompositeTypes{T}}, el) where {T <: SVector} = (el.data,)
 
 ###########
 # SMatrix #
@@ -1256,21 +1316,9 @@ function storage_style(::Type{SMatrix{M, N, T, L}}; dims = nothing, kwargs...) w
     validate_fixed_dims(dims, (M, N))
     if L == 0
         return SingletonStorageStyle()
-    elseif is_elemental(T; kwargs...)
-        return ArrayStorageStyle(T, (M, N,))
-    else
-        return CompositeStorageStyle()
     end
+    return fixed_array_storage_style(T, (M, N); kwargs...)
 end
-
-construct(::Type{HDF5VectorOfArrayishTypes{T, D, DT}}, el) where {T <: SMatrix, D, DT} = T(el)
-deconstruct(::Type{<:HDF5VectorOfArrayishTypes}, el::SMatrix) = el
-
-# When these are composite, we treat them like normal composite types. They have a `data`
-# field, and we log that one field, letting the type of the `data` field break down like
-# any other composite type.
-construct(::Type{HDF5VectorOfCompositeTypes{T}}, el) where {T <: SMatrix} = T(el...)
-deconstruct(::Type{HDF5VectorOfCompositeTypes{T}}, el) where {T <: SMatrix} = (el.data,)
 
 ##########
 # SArray #
@@ -1282,20 +1330,8 @@ function storage_style(::Type{SArray{S, T, D, L}}; dims = nothing, kwargs...) wh
     dims = validate_fixed_dims(dims, fieldtypes(S))
     if L == 0
         return SingletonStorageStyle()
-    elseif is_elemental(T; kwargs...)
-        return ArrayStorageStyle(T, dims)
-    else
-        return CompositeStorageStyle()
     end
+    return fixed_array_storage_style(T, dims; kwargs...)
 end
-
-construct(::Type{HDF5VectorOfArrayishTypes{T, D, DT}}, el) where {T <: SArray, D, DT} = T(el)
-deconstruct(::Type{<:HDF5VectorOfArrayishTypes}, el::SArray) = el
-
-# When these are composite, we treat them like normal composite types. They have a `data`
-# field, and we log that one field, letting the type of the `data` field break down like
-# any other composite type.
-construct(::Type{HDF5VectorOfCompositeTypes{T}}, el) where {T <: SArray} = T(el...)
-deconstruct(::Type{HDF5VectorOfCompositeTypes{T}}, el) where {T <: SArray} = (el.data,)
 
 end # module HDF5Vectors
