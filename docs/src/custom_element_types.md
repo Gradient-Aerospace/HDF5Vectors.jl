@@ -4,7 +4,7 @@
 CurrentModule = HDF5Vectors
 ```
 
-Many common types can be stored as HDF5 vectors without specifying how that should happen. Sometimes it is useful to have more control. In that case, a custom type can use one of the existing storage styles by implementing the following methods:
+Many common types can be stored as HDF5 vectors without specifying how that should happen. Sometimes it is useful to have more control. Selecting an existing serialization style requires only [`storage_style`](@ref). Defining a custom representation may also require [`construct`](@ref) and [`deconstruct`](@ref):
 
 * [`storage_style`](@ref)
 * [`construct`](@ref)
@@ -18,7 +18,7 @@ struct Grade
 end
 ```
 
-Here's what's necessary to store this as the "elemental" style, where the label is stored as a char (UInt8).
+Here's what's necessary to use the "elemental" style, storing the grade as one `UInt8` byte.
 
 ```
 using HDF5Vectors

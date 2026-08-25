@@ -44,7 +44,7 @@ arr = load_hdf5_vector(fid["/x"], Float64)
 Further, you can move an existing array into HDF5 like so:
 
 ```
-fid = HDF5.h5open("storage.h5")
+fid = HDF5.h5open("storage.h5", "r+")
 my_hdf5_vector = copy_to_hdf5_vector(fid["/"], "some_name", my_regular_vector)
 ```
 
@@ -60,7 +60,7 @@ Elemental types:
 * Float32 and Float64
 * Enum
 * Char
-* Bits-type structs
+* Bits-type structs when created with `portable = false`
 
 String-like types:
 
@@ -76,14 +76,14 @@ Singleton types:
 Array-like types:
 
 * SVector, SMatrix, and SArray of elemental type
-* Vector, Matrix, and Array of element type, where dimensions are constant from element to element
+* Vector, Matrix, and Array of elemental values when their fixed dimensions are supplied with `dims`
 * NTuple of elemental type
 
 Composite types:
 
 * General tuple of types on this list
 * General named tuple of types on this list
-* General struct of types on this list
+* General structs whose fields have supported types and which can be reconstructed from their field values
 
 Serialized types:
 
@@ -100,7 +100,7 @@ Values passed to `push!` must already be instances of the HDF5 vector's declared
 
 ## Iteration
 
-When iterating over an HDF5Vector, it's far faster to call [`iterable`](@ref) on the vector and then iterate on what that returns. For example:
+When the entire vector fits in memory, it is generally much faster to call [`iterable`](@ref) and iterate over its result. For example:
 
 ```
 arr = create_hdf5_vector(...)
@@ -108,7 +108,7 @@ arr = create_hdf5_vector(...)
 [el.x^2 + el.y^2 for el in iterable(arr)]
 ```
 
-The reason this is faster is that [`iterable`](@ref) creates a structure intended to take advantage of the way HDF5.jl will access the data.
+Currently, [`iterable`](@ref) loads the entire HDF5 vector into a Julia `Vector` before iteration. This avoids a separate HDF5 read for every element, but it requires enough memory to hold the full vector. Iterating over the HDF5 vector directly reads elements individually and does not load the entire vector at once.
 
 ## Replacing Elements
 
@@ -134,7 +134,7 @@ arr = load_hdf5_vector(fid["/x"], Float64)
 
 ### Elemental Types
 
-These will simply be n-element arrays in the HDF5 file.
+The HDF5 vector is a group, and its values are stored in a one-dimensional dataset named `data` inside that group. For example, the values for a vector at `/my_group/my_vector` are stored at `/my_group/my_vector/data`.
 
 ### Array-Like Types
 
@@ -176,7 +176,7 @@ Note that a failed `push!` for a composite type may result in some fields of the
 For bits-type structs, a user can specify that they want "non-portable" storage. This means that the HDF5.jl package can define a custom HDF5 type to store the struct, and the resulting HDF5 file will look like this:
 
 ```
-/my_group/my_type/ # An array of the HDF5 custom type
+/my_group/my_type/data # An array of the HDF5 custom type
 ```
 
 This is much faster and more efficient, but accessing it outside of Julia will require substantially more code to work with the HDF5 type definition system.
@@ -214,6 +214,7 @@ That's it. Now, when we create an array for this type, each element will be seri
 
 ```
 import HDF5
+import JSON3
 using HDF5Vectors
 HDF5.h5open("server_details.h5", "w") do fid
     details = create_hdf5_vector(fid["/"], "details", SomeServerDetails)

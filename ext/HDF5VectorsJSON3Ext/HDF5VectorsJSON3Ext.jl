@@ -1,7 +1,5 @@
 module HDF5VectorsJSON3Ext
 
-# println("Loading HDF5VectorsJSON3Ext")
-
 ################################
 # Types that Serialize to JSON #
 ################################
