@@ -4,7 +4,7 @@
 CurrentModule = HDF5Vectors
 ```
 
-Most types can be stored reasonably well as HDF5 vectors without having to specifying anything about how that should happen. However, sometimes it's desireable to have more control. In that case, it's possible to specify how a custom type should be stored in the HDF5 file, using one of the existing storage styles. The following methods should be implemented for the type:
+Many common types can be stored as HDF5 vectors without specifying how that should happen. Sometimes it is useful to have more control. In that case, a custom type can use one of the existing storage styles by implementing the following methods:
 
 * [`storage_style`](@ref)
 * [`construct`](@ref)
@@ -41,7 +41,7 @@ using HDF5
 h5open("custom_element_type.h5", "w") do fid
 
     # Create the vector.
-    arr = create_hdf5_vector(fid, "grades", Grade)
+    arr = create_hdf5_vector(fid["/"], "grades", Grade)
 
     # Add some grades.
     push!(arr, Grade("A"))
@@ -62,6 +62,6 @@ end
 The resulting output is what we'd expect:
 
 ```
-read(fid["grades"]) = UInt8[0x41, 0x42, 0x43, 0x44, 0x46]
+read(fid["grades"]["data"]) = UInt8[0x41, 0x42, 0x43, 0x44, 0x46]
 collect(arr) = Grade[Grade("A"), Grade("B"), Grade("C"), Grade("D"), Grade("F")]
 ```

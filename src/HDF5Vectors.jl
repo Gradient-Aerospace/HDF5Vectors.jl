@@ -133,7 +133,7 @@ Array storage results in HDF5 files where the dataset has the dimensions of each
 plus one added dimension. For instance, if each element to be stored is an m-by-n array,
 then the HDF5 file will contain an m-by-n-by-p array, where element `k` is `[:, :, k]`.
 
-Structs can be stored in a "portable" way. For the a struct defined as:
+Structs can be stored in a "portable" way. For a struct defined as:
 
 ```
 struct MyType
@@ -145,8 +145,8 @@ end
 the resulting HDF5 file would look like so:
 
 ```
-/my_group/my_vector/arrays/a # a 1D array of Int64
-/my_group/my_vector/arrays/b # a 1D array of Float64
+/my_group/my_vector/data/a # a 1D array of Int64
+/my_group/my_vector/data/b # a 1D array of Float64
 ```
 
 This format is called "portable" because it is easy to interpret this dataset outside of
@@ -179,8 +179,8 @@ Keyword arguments:
   element is a 3-by-4 matrix.
 
 Users can add a `storage_style` method for their custom types to allow them to express how
-their types out to be stored. E.g., if a type should always be serialized, then this would
-instruct Julia to use serialization to a byte array for the give type:
+their types ought to be stored. E.g., if a type should always be serialized, then this
+would instruct Julia to use serialization to a byte array for the given type:
 
 ```
 HDF5Vectors.storage_style(::Type{MyType}; kwargs...) = HDF5Vectors.ByteArrayStorageStyle()
@@ -250,8 +250,8 @@ end
 
 Create the appropriate Julia value from the raw element `el` retrieved from the
 HDF5 dataset. The behaviour is determined by the storage style associated with `type`.
-This generic definition is a placeholder; concrete storage implementations overload
-`construct` for their particular container types and element representations.
+No generic implementation is provided; storage backends define methods for their
+particular container types and element representations.
 """
 function construct end
 
@@ -259,9 +259,9 @@ function construct end
     deconstruct(type::Type, el)
 
 Convert the Julia value `el` into the representation stored in the HDF5 file. The
-storage style associated with `type` chooses how the conversion is performed. Like
-`construct`, this generic definition is a no-op; storage backends provide concrete
-methods.
+storage style associated with `type` chooses how the conversion is performed. No generic
+implementation is provided; storage backends define methods for their particular
+container types and element representations.
 """
 function deconstruct end
 
@@ -397,38 +397,6 @@ function Base.iterate(itr::HDF5VectorIterator, state = HDF5VectorIteratorState(1
     return (el, HDF5VectorIteratorState(next_data_itr_state))
 end
 
-# If we just let the HDF5Arrays have a cache, then iteration (with a mutable iterator!)
-# works efficiently. But if we don't want to fill up RAM with all of the things we've cached
-# then we'll need to clear the cache, which is an extra step. I'm really not sure we want
-# cache.
-
-# If we want a fallback `iterate` behavior...
-
-# # This allocates like crazy because it's a non-bits-type, so the creation of these
-# # requires allocation. It's not _that_ slow, but iterating on these arrays is the slowest
-# # way to work with them. Iterate over the result of `iterable` instead.
-# struct HDF5ArrayIteratorState{T}
-#     data::Vector{T}
-#     index::Int64
-# end
-# function Base.iterate(arr::HDF5VectorOfHDF5NativeType{T}) where {T}
-#     data = collect(arr)
-#     el, internal_state = iterate(data)
-#     return (el, HDF5ArrayIteratorState{T}(data, internal_state))
-# end
-# function Base.iterate(arr::HDF5VectorOfHDF5NativeType{T}, state::HDF5ArrayIteratorState{T})::Union{Nothing, Tuple{T, HDF5ArrayIteratorState{T}}} where {T}
-#     if state.index > arr.count
-#         return nothing
-#     end
-#     itr_out = iterate(state.data, state.index)
-#     return (itr_out[1], HDF5ArrayIteratorState{T}(state.data, itr_out[2]))
-# end
-
-# I don't think we need these unless the iterator itself is stateful.
-# Base.isdone(arr::HDF5VectorOfHDF5NativeType) = arr.count == 0
-# Base.isdone(::HDF5VectorOfHDF5NativeType, ::Nothing) = true
-# Base.isdone(::HDF5VectorOfHDF5NativeType, state::HDF5ArrayIteratorState) = isdone(state.data, state.index)
-
 # This seems inefficient, but this is used rarely.
 function serialize_to_byte_array(x)
     io = IOBuffer() # Will use UInt8 by default.
@@ -440,10 +408,6 @@ function deserialize_from_byte_array(x)
     io = IOBuffer(x)
     return Serialization.deserialize(io)
 end
-
-# function get_storage_dimensions(style::AbstractHDF5VectorStorageStyle)
-#     return ()
-# end
 
 function store_metadata(style::AbstractHDF5VectorStorageStyle, group, el_type; dims = nothing, portable)
     metadata_group = HDF5.create_group(group, "metadata")

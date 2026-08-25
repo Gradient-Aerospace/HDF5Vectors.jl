@@ -20,7 +20,7 @@ fid = HDF5.h5open("storage.h5", "w")
 # Create an array for Float64s called "x" in that file.
 arr = create_hdf5_vector(fid["/"], "x", Float64)
 
-# Push some elments into the array.
+# Push some elements into the array.
 for el in 1. : 100.
     push!(arr, el)
 end
@@ -183,7 +183,7 @@ This is much faster and more efficient, but accessing it outside of Julia will r
 
 ### Serialized Types
 
-When a type is too flexible/odd for the above, it can be stored via serialization. This is far slower, but it works for almost everything. There are two types of serialization currently provided.
+When a type is selected for serialization by the rules above, it can be stored as serialized data. This is far slower than the other storage styles and is intended for supported types that do not have a useful native or structured representation. There are two types of serialization currently provided.
 
 The `ByteArrayStorageStyle` uses Julia's Serialization package to serialize a given type to a byte array. The resulting HDF5 dataset will be uninterpretable outside of Julia.
 
@@ -216,7 +216,7 @@ That's it. Now, when we create an array for this type, each element will be seri
 import HDF5
 using HDF5Vectors
 HDF5.h5open("server_details.h5", "w") do fid
-    details = create_hdf5_vector(fid, "details", SomeServerDetails)
+    details = create_hdf5_vector(fid["/"], "details", SomeServerDetails)
     push!(details, SomeServerDetails("localhost", up))
     push!(details, SomeServerDetails("old_pc", down))
     push!(details, SomeServerDetails("phone", unknown))
