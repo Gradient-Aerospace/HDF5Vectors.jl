@@ -109,6 +109,30 @@ end
 HDF5Vectors.storage_style(::Type{MyJSONishType}; kwargs...) = HDF5Vectors.JSONStorageStyle()
 Base.:(==)(a::MyJSONishType, b::MyJSONishType) = a.x == b.x && a.y == b.y && a.z == b.z
 
+struct MyFallibleElementalType
+    value::Int64
+end
+function HDF5Vectors.storage_style(::Type{MyFallibleElementalType}; kwargs...)
+    return HDF5Vectors.ElementalStorageStyle(Int64)
+end
+function HDF5Vectors.construct(
+    ::Type{HDF5Vectors.HDF5VectorOfElementalTypes{MyFallibleElementalType, Int64}},
+    value::Int64,
+)
+    return MyFallibleElementalType(value)
+end
+function HDF5Vectors.deconstruct(
+    ::Type{HDF5Vectors.HDF5VectorOfElementalTypes{MyFallibleElementalType, Int64}},
+    el::MyFallibleElementalType,
+)
+
+    if el.value < 0
+        throw(ArgumentError("MyFallibleElementalType values must be nonnegative."))
+    end
+    return el.value
+
+end
+
 struct MyNoncreteType
     x::NamedTuple
 end
@@ -405,6 +429,38 @@ end
         @test collect(arr) == [replacement]
         @test_throws HDF5.API.H5Error setindex!(arr, replacement, 2)
         @test collect(arr) == [replacement]
+
+    end
+
+end
+
+@testset "bulk copy preflight" begin
+
+    h5open("$out_dir/bulk_copy_preflight.h5", "w") do fid
+
+        # Elemental conversion must finish before the optimized copy creates its group.
+        # This custom elemental representation deliberately rejects one source value.
+        elemental_source = [
+            MyFallibleElementalType(1),
+            MyFallibleElementalType(-1),
+        ]
+        @test_throws ArgumentError copy_to_hdf5_vector(
+            fid["/"],
+            "invalid_elemental",
+            elemental_source,
+        )
+        @test !haskey(fid, "invalid_elemental")
+
+        # Fixed-shape array storage must likewise validate every element before creating
+        # the destination. The second vector does not have the declared dimensions.
+        array_source = [[1.0, 2.0], [3.0, 4.0, 5.0]]
+        @test_throws DimensionMismatch copy_to_hdf5_vector(
+            fid["/"],
+            "invalid_array",
+            array_source;
+            dims = (2,),
+        )
+        @test !haskey(fid, "invalid_array")
 
     end
 

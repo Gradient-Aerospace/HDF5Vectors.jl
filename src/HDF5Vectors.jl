@@ -613,28 +613,27 @@ end
 # saving it element-by-element.
 function copy_to_hdf5_vector(style::ElementalStorageStyle, group, name, collection; chunk_length, portable, kwargs...)
 
-    # This is basically the same as create_hdf5_vector.
+    # Deconstruct the full collection before changing the HDF5 file. A conversion error
+    # should not leave a partially created vector behind.
     el_type = eltype(collection)
+    datatype = style.datatype
+    type = HDF5VectorOfElementalTypes{el_type, datatype}
+    array = datatype[deconstruct(type, el) for el in collection]
+    n = length(array)
+
+    # This is basically the same as create_hdf5_vector.
     this_group = HDF5.create_group(group, name)
     store_metadata(style, this_group, el_type; portable)
-    datatype = style.datatype
 
     # Here, however, we have the length. Nonetheless, we want this to be able to grow, so we
     # will create it with a dataspace explicitly (rather than just setting
     # this_group["data"] to array).
-    n = length(collection)
     vector_dims = (n,)
     max_dims = (-1,) # This can grow forever.
     dataspace = HDF5.dataspace(vector_dims, max_dims)
     dataset = create_dataset(this_group, "data", datatype, dataspace; chunk = (chunk_length,))
 
-    # To deconstruct, we need to know what type we're deconstructing _for_.
-    type = HDF5VectorOfElementalTypes{el_type, datatype}
-
-    # Now deconstruct every element in RAM.
-    array = [deconstruct(type, el) for el in collection]
-
-    # Now that we have the array, assign it to the HDF5 file.
+    # Assign the prepared array to the HDF5 file.
     this_group["data"][:] = array
 
     # Now we have a normal HDF5 vector.
@@ -818,26 +817,26 @@ end
 
 function copy_to_hdf5_vector(style::ArrayStorageStyle, group, name, collection; chunk_length, portable, kwargs...)
 
-    # Set up the group and metadata just like for create_hdf5_vector.
+    # Make a big array with the deconstructed values from the collection before changing
+    # the HDF5 file. A conversion or dimension error should not leave a partially created
+    # vector behind.
     arrayish_el_type = eltype(collection) # like Vector{Int64} or SVector{3, Float64}
     el_dims = style.dims
     datatype = style.datatype # Like Int64 or Float64
+    n = length(collection)
+    type = HDF5VectorOfArrayishTypes{arrayish_el_type, Tuple{el_dims...,}, datatype}
+    big_array = Array{datatype}(undef, (el_dims..., n))
+    for k in eachindex(collection)
+        big_array[(Colon() for _ in el_dims)..., k] .= deconstruct(type, collection[k])
+    end
+
+    # Set up the group and dataset with the current size and the ability to grow.
     this_group = HDF5.create_group(group, name)
     store_metadata(style, this_group, arrayish_el_type; dims = el_dims, portable)
-
-    # Set up the dataset with the current size and the ability to grow.
-    n = length(collection)
     vector_dims = (el_dims..., n)
     max_dims = (el_dims..., -1,) # Last dimension can grow forever.
     dataspace = HDF5.dataspace(vector_dims, max_dims)
     dataset = create_dataset(this_group, "data", datatype, dataspace; chunk = (el_dims..., chunk_length,))
-
-    # Make a big array with the deconstructed values from the collection.
-    type = HDF5VectorOfArrayishTypes{arrayish_el_type, Tuple{el_dims...,}, datatype}
-    big_array = Array{style.datatype}(undef, (el_dims..., n))
-    for k in eachindex(collection)
-        big_array[(Colon() for _ in el_dims)..., k] .= deconstruct(type, collection[k])
-    end
 
     # Add the data.
     this_group["data"][(Colon() for _ in el_dims)..., :] = big_array
