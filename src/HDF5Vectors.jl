@@ -529,10 +529,6 @@ function load_hdf5_vector(group::HDF5.Group, el_type)
     )
 end
 
-function load_hdf5_vector(dataset::HDF5.Dataset, el_type; kwargs...)
-    return load_hdf5_vector(storage_style(el_type; kwargs...), dataset, el_type; kwargs...)
-end
-
 """
     copy_to_hdf5_vector(
         group,
@@ -658,7 +654,12 @@ function copy_to_hdf5_vector(style::ElementalStorageStyle, group, name, collecti
 
 end
 
-function load_hdf5_vector(style::ElementalStorageStyle, group, el_type; kwargs...)
+function load_hdf5_vector(
+    style::ElementalStorageStyle,
+    group::HDF5.Group,
+    el_type;
+    kwargs...,
+)
     dataset = group["data"]
     datatype = style.datatype # eltype(dataset)
     count = size(dataset)[end]
@@ -760,7 +761,12 @@ function copy_to_hdf5_vector(
 
 end
 
-function load_hdf5_vector(style::SingletonStorageStyle, group, el_type; kwargs...)
+function load_hdf5_vector(
+    style::SingletonStorageStyle,
+    group::HDF5.Group,
+    el_type;
+    kwargs...,
+)
     dataset = group["data"]
     count = dataset[1]
     return HDF5VectorOfSingletonTypes{el_type}(dataset, count)
@@ -862,7 +868,12 @@ function copy_to_hdf5_vector(style::ArrayStorageStyle, group, name, collection; 
 
 end
 
-function load_hdf5_vector(style::ArrayStorageStyle, group, el_type; kwargs...)
+function load_hdf5_vector(
+    style::ArrayStorageStyle,
+    group::HDF5.Group,
+    el_type;
+    kwargs...,
+)
     dataset = group["data"]
     datatype = style.datatype
     el_dims = style.dims # size(dataset)[1:end-1]
@@ -977,11 +988,15 @@ function create_hdf5_vector(style::ByteArrayStorageStyle, group, name, el_type; 
     )
 end
 # We'll use the generic copy_to_hdf5_vector.
-function load_hdf5_vector(style::ByteArrayStorageStyle, group_or_dataset, el_type; kwargs...)
-    this_group = group_or_dataset
+function load_hdf5_vector(
+    style::ByteArrayStorageStyle,
+    group::HDF5.Group,
+    el_type;
+    kwargs...,
+)
     return HDF5VectorWithByteArrayStorage{el_type}(
-        load_hdf5_vector(this_group["data"]["bytes"], UInt8),
-        load_hdf5_vector(this_group["data"]["stops"], Int64),
+        load_hdf5_vector(group["data"]["bytes"], UInt8),
+        load_hdf5_vector(group["data"]["stops"], Int64),
     )
 end
 Base.length(arr::HDF5VectorWithByteArrayStorage) = length(arr.stops)
@@ -1087,10 +1102,14 @@ function copy_to_hdf5_vector(
 
 end
 
-function load_hdf5_vector(style::CompositeStorageStyle, group_or_dataset, el_type; kwargs...)
-    this_group = group_or_dataset
+function load_hdf5_vector(
+    style::CompositeStorageStyle,
+    group::HDF5.Group,
+    el_type;
+    kwargs...,
+)
     arrays = [
-        load_hdf5_vector(this_group["data"][string(fn)], ft)
+        load_hdf5_vector(group["data"][string(fn)], ft)
         for (fn, ft) in zip(fieldnames(el_type), fieldtypes(el_type))
     ]
     if isempty(arrays)
