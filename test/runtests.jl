@@ -30,6 +30,14 @@ function test_collection(
     idxs = 1:min(3, length(source))
     @test arr[idxs] == source[idxs]
     @test arr[collect(idxs)] == source[collect(idxs)]
+
+    # Boolean vectors and BitVectors are logical masks, not collections of integer indices.
+    mask = [isodd(k) for k in eachindex(source)]
+    @test arr[mask] == source[mask]
+    @test arr[BitVector(mask)] == source[BitVector(mask)]
+    @test arr[falses(length(source))] == source[falses(length(source))]
+    @test_throws BoundsError arr[vcat(mask, false)]
+
     @test collect(arr) == source
     @test eltype(arr) == T
     @test map(identity, iterable(arr)) == source

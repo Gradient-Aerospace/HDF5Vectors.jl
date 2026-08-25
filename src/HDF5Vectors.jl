@@ -345,11 +345,18 @@ end
 # Use the iterable form rather than trying to iterate via getindex.
 Base.map(f, arr::AbstractHDF5Vector) = map(f, iterable(arr))
 
-# Range and vector indexing should behave like any other AbstractVector and return a plain
-# Julia Vector. We intentionally construct this from scalar indexing so all storage backends
-# (elemental, array-ish, composite, serialized) share one consistent behavior.
+# Range and integer-vector indexing should behave like any other AbstractVector and return a
+# plain Julia Vector. We construct these from scalar indexing so all storage backends share
+# one consistent behavior.
 function Base.getindex(arr::AbstractHDF5Vector, k::AbstractRange{<:Integer})
     return [arr[j] for j in k]
+end
+
+# Logical indexing examines the whole mask, so one bulk read is generally much faster than
+# a separate HDF5 read for every selected position.
+function Base.getindex(arr::AbstractHDF5Vector, mask::AbstractVector{Bool})
+    checkbounds(arr, mask)
+    return collect(arr)[mask]
 end
 function Base.getindex(arr::AbstractHDF5Vector, k::AbstractVector{<:Integer})
     return [arr[j] for j in k]
