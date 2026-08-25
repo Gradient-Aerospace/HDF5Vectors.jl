@@ -39,7 +39,8 @@ const hdf5_scalar_types = Union{Bool, UInt8, Int8, UInt16, Int16, UInt32, Int32,
 ##################
 
 """
-An abstract type intended as a parent for all HDF5 vector storage styles.
+An abstract type intended as a parent for all HDF5 vector storage styles. Custom backends
+define a subtype and select it with [`storage_style`](@ref).
 """
 abstract type AbstractHDF5VectorStorageStyle end
 
@@ -280,6 +281,13 @@ Base.broadcastable(arr::AbstractHDF5Vector) = collect(arr)
 
 # Composite storage checks this before replacing any field, so append-only children can
 # reject the operation before another child is changed.
+"""
+    supports_setindex(vector::AbstractHDF5Vector)
+
+Return whether `vector` supports replacing existing elements with `setindex!`. The default
+is `false`. A custom backend that implements replacement and can be nested in composite
+storage should define this to return `true`.
+"""
 supports_setindex(::AbstractHDF5Vector) = false
 
 function validate_chunk_length(chunk_length)
@@ -397,7 +405,26 @@ function deserialize_from_byte_array(x)
     return Serialization.deserialize(io)
 end
 
-function store_metadata(style::AbstractHDF5VectorStorageStyle, group, el_type; dims = nothing, portable)
+"""
+    store_metadata(
+        style::AbstractHDF5VectorStorageStyle,
+        group::HDF5.Group,
+        el_type;
+        dims = nothing,
+        portable,
+    )
+
+Store the common metadata required by `load_hdf5_vector` in a newly created HDF5 vector
+group. This is an implementation hook for custom storage backends; ordinary callers do not
+need to call it.
+"""
+function store_metadata(
+    style::AbstractHDF5VectorStorageStyle,
+    group::HDF5.Group,
+    el_type;
+    dims = nothing,
+    portable,
+)
     metadata_group = HDF5.create_group(group, "metadata")
     metadata_group["type"] = string(el_type)
     metadata_group["serialized_type"] = serialize_to_byte_array(el_type)
@@ -778,6 +805,10 @@ end
 # HDF5VectorOfArrayishTypes #
 #############################
 
+"""
+Used to stack fixed-size array-like values in one multidimensional HDF5 dataset. `datatype`
+is the scalar HDF5 representation and `dims` contains the dimensions of one vector element.
+"""
 struct ArrayStorageStyle{HT, ND} <: AbstractHDF5VectorStorageStyle
     datatype::Type{HT}
     dims::NTuple{ND, Int64}
@@ -957,7 +988,10 @@ end
 
 import Serialization
 
-# Users can select this style to store values using Julia's Serialization format.
+"""
+Used to store each vector element with Julia's `Serialization` format. The serialized bytes
+are Julia-specific, and this representation does not support replacing existing elements.
+"""
 struct ByteArrayStorageStyle <: AbstractHDF5VectorStorageStyle end
 
 # Serialized values are concatenated in `storage`; `stops` records the cumulative ending
@@ -1237,8 +1271,10 @@ end
 # JSON Serialization #
 ######################
 
-# We define the storage style here, but its implementation is in HDF5VectorsJSON3Ext, which
-# is only loaded if JSON3 is loaded.
+"""
+Used to store each vector element as a JSON string through JSON3. Load JSON3 before creating
+or loading a vector with this style.
+"""
 struct JSONStorageStyle <: AbstractHDF5VectorStorageStyle end
 
 ###############

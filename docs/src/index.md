@@ -122,47 +122,5 @@ The next guides describe the available element representations and the resulting
 
 * [Supported Element Types and Creation Options](supported_types.md) explains which Julia types can be stored and how `dims`, `chunk_length`, and `portable` affect them.
 * [HDF5 Storage Layout](storage_layout.md) documents the datasets and groups that readers in Julia, Python, MATLAB, C++, and other environments will encounter.
-
-## Specifying a Storage Type
-
-Users can specify what "style" of storage should be used for a given type. Storage style is a property of the element type and relevant creation options, not an override for one particular vector. The same [`storage_style`](@ref) method is called again when loading the vector, so it must make a consistent selection from those inputs.
-
-For instance, suppose we had the following type:
-
-```
-@enum ServerStatus unknown up down
-struct SomeServerDetails
-    hostname::String
-    status::ServerStatus
-end
-```
-
-When that's stored in the HDF5 file, let's make it serialize to JSON. To do this, we can apply the following trait:
-
-```
-import HDF5Vectors: storage_style, JSONStorageStyle
-storage_style(::Type{SomeServerDetails}; kwargs...) = JSONStorageStyle()
-```
-
-That's it. Now, when we create an array for this type, each element will be serialized to JSON. The resulting HDF5 file will have an array of strings that can be loaded in any other environment. To complete the example:
-
-```
-import HDF5
-import JSON3
-using HDF5Vectors
-HDF5.h5open("server_details.h5", "w") do fid
-    details = create_hdf5_vector(fid["/"], "details", SomeServerDetails)
-    push!(details, SomeServerDetails("localhost", up))
-    push!(details, SomeServerDetails("old_pc", down))
-    push!(details, SomeServerDetails("phone", unknown))
-    @show collect(details)
-end
-```
-
-The HDF5 file will have the following:
-
-```
-/details/data/json/data # An array of JSON strings, one for each of the pushed elements
-```
-
-(By default, the JSON is compact in style, not "pretty", to reduce the extra storage burden of all of those spaces. You can "pretty" on extraction from the HDF5 file if a human is supposed to look at it.)
+* [Custom Element Types](custom_element_types.md) starts with the existing storage representations and then shows how to define custom conversions.
+* [Custom HDF5 Vector Types](custom_vector_types.md) describes the backend interface for packages that need an entirely new on-disk representation.
