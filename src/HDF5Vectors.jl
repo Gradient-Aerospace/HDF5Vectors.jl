@@ -104,85 +104,34 @@ end
 # portability before deciding to store non-native types as elemental or composite.
 
 """
-    storage_style(el_type::Type; kwargs...)
+    storage_style(el_type::Type; dims = nothing, portable = true, kwargs...)
 
-Returns the storage style intended for this type. Available styles include:
+Return the storage style used for vectors with the declared element type `el_type`.
+Built-in styles include:
 
 * `ElementalStorageStyle` for scalars or non-portable bits-type structs
 * `SingletonStorageStyle` for types that have exactly one possible value
 * `ArrayStorageStyle` for arrays of known, consistent dimensions holding elemental types
-* `CompositeStorageStyle` for general structs
+* `CompositeStorageStyle` for field-oriented structs and heterogeneous tuples
 * `ByteArrayStorageStyle` for Julia serialization
-* `JSONStorageStyle` for serializing types to JSON strings
+* `JSONStorageStyle` for JSON3 serialization
 
-The default storage style for scalars and "non-portable" bits-type structs (more
-below) is `ElementalStorageStyle`. For vectors with known dimensions, `ArrayStorageStyle`
-is the default. Singleton types use `SingletonStorageStyle`. For other structs (either
-non-bits-types or "portable"), the default is `CompositeStorageStyle`. Nonconcrete types and
-arrays without known dimensions default to `ByteArrayStorageStyle`. Unsupported primitive
-types produce an error unless the user explicitly defines another storage style.
+`dims` declares the fixed dimensions of dynamically sized array elements. `portable`
+selects field-oriented storage rather than a native HDF5 datatype for bits-type composite
+elements.
 
-The storage style is selected again from the element type and stored options when a vector
-is loaded. A custom `storage_style` method must therefore make a consistent choice from
-those inputs. The style-taking storage methods are implementation hooks, not per-vector
-overrides for selecting a different representation.
+Define a more-specific method to select a representation for a custom element type. Style
+selection occurs both when a vector is created and when it is loaded, so a custom method
+must return the same style from the element type and stored options.
 
-HDF5.jl presents an array-storage dataset with the dimensions of each element plus one
-added dimension. For instance, if each element is an m-by-n array, Julia sees an
-m-by-n-by-p dataset, where element `k` is `[:, :, k]`. A row-major reader sees the raw HDF5
-dimensions in reverse order: p-by-n-by-m.
-
-Structs can be stored in a "portable" way. For a struct defined as:
-
-```
-struct MyType
-    a::Int64
-    b::Float64
-end
-```
-
-the resulting HDF5 file would look like so:
-
-```
-/my_group/my_vector/data/a/data # a 1D dataset of Int64
-/my_group/my_vector/data/b/data # a 1D dataset of Float64
-```
-
-This format is called "portable" because it is easy to interpret this dataset outside of
-Julia.
-
-"Portability" is controlled by the `portable` keyword argument. When this is false, the
-above struct would be stored as:
-
-```
-/my_group/my_vector/data # a 1D array of custom type inferred from MyType
-```
-
-This uses the HDF5 type system via the HDF5.jl package to encode the type. The underlying
-data can still be interpreted outside of Julia, but it requires substantially more code to
-interpret the type information in a useful way. If you are _only_ interested in loading
-the HDF5 in Julia, use `portable = false`, and the resulting storage will be faster. (Note
-that non-bits composite types cannot use this representation and hence always use the
-field-oriented form.)
-
-When the elements to be stored are themselves vectors, matrices, or arrays of known
-dimensions, provide those dimensions via the `dims` keyword argument to use array-like
-storage. Without `dims`, dynamically sized arrays use byte-array serialization.
-
-Keyword arguments:
-
-* `portable`: When true (the default), composite types like structs will be stored in a
-  slower but more portable way. (For other types, this argument is ignored.)
-* `dims`: Sets the dimensions of Array types (otherwise, ignored), such as (3, 4) when each
-  element is a 3-by-4 matrix.
-
-Users can add a `storage_style` method for their custom types to allow them to express how
-their types ought to be stored. E.g., if a type should always be serialized, then this
-would instruct Julia to use serialization to a byte array for the given type:
+For example, this selects Julia byte serialization for `MyType`:
 
 ```
 HDF5Vectors.storage_style(::Type{MyType}; kwargs...) = HDF5Vectors.ByteArrayStorageStyle()
 ```
+
+See [Supported Element Types and Creation Options](@ref) and [Custom Element Types](@ref)
+for the selection rules and customization examples.
 """
 function storage_style(el_type::Type; portable = true, kwargs...)
 

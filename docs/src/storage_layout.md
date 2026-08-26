@@ -23,6 +23,8 @@ Every HDF5 vector occupies an HDF5 group. The group contains `metadata` and `dat
 
 Readers outside Julia usually need only the paths under `data`. The plain-text `metadata/type` value can be informative, but `metadata/serialized_type` uses Julia's `Serialization` format and is used by `load_hdf5_vector(group)` to reconstruct the Julia element type. Nested HDF5 vectors, such as the fields of a composite value, have their own `metadata` and `data` children.
 
+HDF5Vectors is intended to load trusted files. `load_hdf5_vector(group)` deserializes `metadata/serialized_type`; the explicit-type form `load_hdf5_vector(group, el_type)` avoids that metadata deserialization, but reading a vector with Julia byte serialization still deserializes its element values. Do not deserialize data from an untrusted HDF5 file.
+
 ## Elemental Values
 
 Numbers, booleans, strings, symbols, characters, and enums use a one-dimensional dataset at `data`:
@@ -112,7 +114,7 @@ Byte-array storage concatenates the independently serialized elements and record
 /values/data/stops/data      # Cumulative byte counts after each element
 ```
 
-For a zero-based reader, element `k` starts at zero when `k == 0` and otherwise at `stops[k - 1]`; it ends immediately before `stops[k]`. The byte sequences use Julia's `Serialization` format and are not intended for reconstruction outside Julia.
+For a zero-based reader, element `k` starts at zero when `k == 0` and otherwise at `stops[k - 1]`; it ends immediately before `stops[k]`. The byte sequences use Julia's `Serialization` format and are not intended for reconstruction outside Julia. Loading them requires the relevant Julia types and modules to remain available and compatible with the serialized representation.
 
 ## JSON-Serialized Values
 
