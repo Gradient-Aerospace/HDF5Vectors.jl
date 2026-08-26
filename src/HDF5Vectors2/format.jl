@@ -11,9 +11,9 @@ const format_version = Int64(1)
 # Julia. Serialized top-level type metadata is only a convenience for Julia callers that do
 # not supply the logical type explicitly.
 #
-# Record children are stored under numeric names so field names never become HDF5 paths and
-# field order remains explicit. The corresponding field names are stored as ordinary string
-# data on the record node.
+# Within schema metadata, record child schemas use numeric names so their order remains
+# explicit. The corresponding field names are stored as ordinary string data on the schema
+# node and are used as the meaningful paths of physical record fields under `data`.
 
 function serialize_metadata_value(value)
     io = IOBuffer()

@@ -86,6 +86,23 @@ struct ConstantSchema{T, C <: AbstractCodec{T, Nothing}} <: AbstractSchema{T}
     codec::C
 end
 
+################################
+# Encoded Representation Types #
+################################
+
+# Bulk encoding needs a concrete destination type even when the source collection is
+# empty. This type is determined entirely by the schema and mirrors one value accepted by
+# the corresponding physical store.
+encoded_value_type(::ScalarSchema{T, H}) where {T, H} = H
+encoded_value_type(::DenseSchema{T, E, H, N}) where {T, E, H, N} = Array{H, N}
+encoded_value_type(::BlobSchema) = Vector{UInt8}
+encoded_value_type(::ConstantSchema) = Nothing
+
+function encoded_value_type(schema::RecordSchema)
+    child_types = map(encoded_value_type, schema.children)
+    return Core.apply_type(Tuple, child_types...)
+end
+
 ##########################
 # Pure Value Conversions #
 ##########################
