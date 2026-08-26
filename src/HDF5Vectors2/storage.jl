@@ -16,6 +16,10 @@ struct DenseStore{H, N} <: AbstractStore
     dims::NTuple{N, Int}
 end
 
+struct RecordStore{Children <: Tuple} <: AbstractStore
+    children::Children
+end
+
 struct ConstantStore <: AbstractStore
     group::HDF5.Group
 end
@@ -100,6 +104,25 @@ end
 
 function create_store(
     group::HDF5.Group,
+    schema::RecordSchema{T, N};
+    chunk_length,
+) where {T, N}
+
+    chunk_length = validate_chunk_length(chunk_length)
+    children = ntuple(N) do index
+        child_group = HDF5.create_group(group, string(index))
+        return create_store(
+            child_group,
+            schema.children[index];
+            chunk_length,
+        )
+    end
+    return RecordStore(children)
+
+end
+
+function create_store(
+    group::HDF5.Group,
     ::ConstantSchema;
     chunk_length,
 )
@@ -154,18 +177,57 @@ function open_store(
 
 end
 
+function open_store(
+    group::HDF5.Group,
+    schema::RecordSchema{T, N},
+) where {T, N}
+
+    child_names = ntuple(index -> string(index), N)
+    validate_store_children(group, child_names)
+    children = ntuple(N) do index
+        return open_store(group[string(index)], schema.children[index])
+    end
+
+    # All nonconstant columns must describe the same number of records. Running this check
+    # while opening catches incomplete or manually altered layouts before they are read.
+    store = RecordStore(children)
+    physical_length(store)
+    return store
+
+end
+
 function open_store(group::HDF5.Group, ::ConstantSchema)
     validate_store_children(group, ())
     return ConstantStore(group)
 end
 
 ###########################
-# Scalar Store Operations #
+# Shared Store Operations #
 ###########################
 
 physical_length(store::ScalarStore) = length(store.dataset)
 physical_length(store::DenseStore{H, N}) where {H, N} = size(store.dataset, N + 1)
 physical_length(::ConstantStore) = nothing
+
+function physical_length(store::RecordStore)
+
+    record_length = nothing
+    for (index, child) in enumerate(store.children)
+        child_length = physical_length(child)
+        if isnothing(child_length)
+            continue
+        elseif isnothing(record_length)
+            record_length = child_length
+        elseif child_length != record_length
+            throw(DimensionMismatch(
+                "Record child $index has length $child_length, while the other " *
+                "nonconstant children have length $record_length.",
+            ))
+        end
+    end
+    return record_length
+
+end
 
 function validate_write_start(store::Union{ScalarStore, DenseStore}, start::Int)
     current_length = physical_length(store)
@@ -174,6 +236,10 @@ function validate_write_start(store::Union{ScalarStore, DenseStore}, start::Int)
     end
     return current_length
 end
+
+###########################
+# Scalar Store Operations #
+###########################
 
 function write_encoded!(store::ScalarStore{H}, index::Int, value::H) where {H}
     current_length = validate_write_start(store, index)
@@ -352,6 +418,161 @@ function truncate_store!(store::DenseStore, count::Int)
     end
     HDF5.set_extent_dims(store.dataset, dense_extent(store, count))
     return store
+end
+
+###########################
+# Record Store Operations #
+###########################
+
+# The encoded value type is a property of physical storage. It lets record batches build
+# concretely typed child columns without consulting a logical schema or running a codec.
+stored_value_type(::ScalarStore{H}) where {H} = H
+stored_value_type(::DenseStore{H, N}) where {H, N} = Array{H, N}
+stored_value_type(::ConstantStore) = Nothing
+
+function stored_value_type(store::RecordStore)
+    child_types = map(stored_value_type, store.children)
+    return Core.apply_type(Tuple, child_types...)
+end
+
+function validate_record_value(store::RecordStore, value::Tuple)
+
+    child_count = length(store.children)
+    if length(value) != child_count
+        throw(ArgumentError(
+            "Encoded record data has $(length(value)) fields instead of $child_count.",
+        ))
+    end
+
+    for index in eachindex(store.children)
+        validate_encoded(store.children[index], value[index])
+    end
+    return value
+
+end
+
+validate_encoded(::ScalarStore{H}, ::H) where {H} = nothing
+function validate_encoded(
+    store::DenseStore{H, N},
+    frame::Array{H, N},
+) where {H, N}
+    validate_dense_frame(store, frame)
+    return nothing
+end
+
+validate_encoded(::ConstantStore, ::Nothing) = nothing
+function validate_encoded(store::RecordStore, value::Tuple)
+    validate_record_value(store, value)
+    return nothing
+end
+
+function validate_write_start(store::RecordStore, start::Int)
+    current_length = physical_length(store)
+    if isnothing(current_length)
+        if start < 1
+            throw(BoundsError(1:typemax(Int), start))
+        end
+    elseif start < 1 || start > current_length + 1
+        throw(BoundsError(1:(current_length + 1), start))
+    end
+    return current_length
+end
+
+function write_encoded!(store::RecordStore, index::Int, value::Tuple)
+
+    # Recursive validation finishes before the first child store changes. Codec failures
+    # have already occurred above this layer, while ordinary shape or type errors are
+    # caught here before any record column is extended.
+    validate_record_value(store, value)
+    validate_write_start(store, index)
+    for child_index in eachindex(store.children)
+        write_encoded!(
+            store.children[child_index],
+            index,
+            value[child_index],
+        )
+    end
+    return store
+
+end
+
+function write_encoded_batch!(
+    store::RecordStore,
+    start::Int,
+    values::AbstractVector{<:Tuple},
+)
+
+    validate_write_start(store, start)
+
+    # Preflighting the complete batch keeps a bad value in a later record from leaving
+    # earlier columns longer than later columns. An HDF5 failure between child writes can
+    # still produce unequal physical lengths, which reopening detects explicitly.
+    for value in values
+        validate_record_value(store, value)
+    end
+
+    for child_index in eachindex(store.children)
+        child = store.children[child_index]
+        child_values = Vector{stored_value_type(child)}(undef, length(values))
+        for value_index in eachindex(values)
+            child_values[value_index] = values[value_index][child_index]
+        end
+        write_encoded_batch!(child, start, child_values)
+    end
+    return store
+
+end
+
+function read_encoded(store::RecordStore, index::Int)
+
+    record_length = physical_length(store)
+    if isnothing(record_length)
+        if index < 1
+            throw(BoundsError(1:typemax(Int), index))
+        end
+    elseif index < 1 || index > record_length
+        throw(BoundsError(store, index))
+    end
+    return map(child -> read_encoded(child, index), store.children)
+
+end
+
+function read_encoded(store::RecordStore, indices::UnitRange{Int})
+
+    record_length = physical_length(store)
+    if isnothing(record_length)
+        if !isempty(indices) && first(indices) < 1
+            throw(BoundsError(1:typemax(Int), indices))
+        end
+    elseif !isempty(indices) && (first(indices) < 1 || last(indices) > record_length)
+        throw(BoundsError(store, indices))
+    end
+
+    child_columns = map(child -> read_encoded(child, indices), store.children)
+    values = Vector{stored_value_type(store)}(undef, length(indices))
+    for value_index in eachindex(values)
+        values[value_index] = map(column -> column[value_index], child_columns)
+    end
+    return values
+
+end
+
+function truncate_store!(store::RecordStore, count::Int)
+
+    current_length = physical_length(store)
+    if isnothing(current_length)
+        if count < 0
+            throw(BoundsError(0:typemax(Int), count))
+        end
+    elseif count < 0 || count > current_length
+        throw(BoundsError(0:current_length, count))
+    end
+
+    for child in store.children
+        truncate_store!(child, count)
+    end
+    return store
+
 end
 
 #############################
