@@ -46,7 +46,7 @@ Heterogeneous tuples and named tuples use the same field-oriented storage as oth
 
 ## Vectors, Matrices, and Arrays
 
-The dimensions of a `Vector`, `Matrix`, or `Array` are not part of its Julia type. Supply `dims` when every element will have the same dimensions and its values can use an elemental HDF5 representation:
+The dimensions of a `Vector`, `Matrix`, or `Array` are not part of its Julia type. The `dims` option can be supplied when every element will have the same dimensions and its values can use an elemental HDF5 representation:
 
 ```julia
 HDF5.h5open("dynamic_vectors.h5", "w") do file
@@ -91,7 +91,7 @@ end
 
 Default reconstruction calls the declared element type with the stored field values in field order. A type whose constructors do not accept those values requires a custom [`construct`](@ref) method.
 
-Bits-type structs can instead use one native HDF5 datatype when created with `portable = false`. See [the `portable` option](#The-portable-Option) and [HDF5 Storage Layout](storage_layout.md) for the tradeoff.
+Bits-type structs can instead use one native HDF5 datatype when created with `portable = false`. [The `portable` option](#The-portable-Option) and [HDF5 Storage Layout](storage_layout.md) describe the tradeoff.
 
 ## Singleton Types
 
@@ -105,7 +105,7 @@ HDF5Vectors uses Julia's `Serialization` format as a fallback for supported nonc
 
 Serialization is not a promise that every Julia value can be stored. It is intended for types that Julia's `Serialization` library can reliably round-trip in the environments where the HDF5 file will be used. The stored bytes are Julia-specific and cannot be interpreted by ordinary HDF5 readers in other languages.
 
-`JSONStorageStyle` is an explicit alternative for values supported by JSON3. Its JSON strings can be read outside Julia. See [Custom Element Types](custom_element_types.md) for selecting either serialization style.
+`JSONStorageStyle` is an explicit alternative for values supported by JSON3. Its JSON strings can be read outside Julia. [Custom Element Types](custom_element_types.md) shows how either serialization style can be selected.
 
 ## Creation Options
 

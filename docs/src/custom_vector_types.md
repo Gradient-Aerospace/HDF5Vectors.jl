@@ -20,7 +20,7 @@ Style-taking methods are implementation hooks. Application code should continue 
 
 ## Creating and Loading Storage
 
-Define these methods for the new style:
+A new style needs creation and loading methods with these signatures:
 
 ```julia
 HDF5Vectors.create_hdf5_vector(
@@ -44,7 +44,7 @@ HDF5Vectors.load_hdf5_vector(
 )
 ```
 
-The creation hook should create one child group named `name` inside the supplied parent group. Call [`HDF5Vectors.store_metadata`](@ref) on that new group so the ordinary loading functions can recover the element type, `dims`, and `portable` setting. Store backend-specific datasets and metadata under the same new group.
+The creation hook should create one child group named `name` inside the supplied parent group. It can then call [`HDF5Vectors.store_metadata`](@ref) on that new group so the ordinary loading functions can recover the element type, `dims`, and `portable` setting. Backend-specific datasets and metadata should also be stored under the same new group.
 
 The loading hook receives the HDF5 vector group itself rather than its parent. It should open the backend's datasets, validate the stored layout sufficiently to construct a usable vector, and return the custom `AbstractHDF5Vector` subtype.
 
@@ -63,7 +63,7 @@ HDF5Vectors.copy_to_hdf5_vector(
 )
 ```
 
-Prepare values that can fail conversion or validation before creating the destination group, where practical, so ordinary input errors do not leave an incomplete destination behind.
+Where practical, values that can fail conversion or validation should be prepared before the destination group is created. This allows ordinary input errors to be reported without leaving an incomplete destination behind.
 
 ## Required Vector Operations
 
@@ -74,7 +74,7 @@ The custom vector type must implement:
 * `Base.getindex(vector, index::Int)`
 * `Base.collect(vector)` with an efficient whole-vector read
 
-Values accepted by `push!` should already have the vector's declared element type. Update any in-memory length only after the corresponding HDF5 write succeeds.
+Values accepted by `push!` should already have the vector's declared element type. Any in-memory length should be updated only after the corresponding HDF5 write succeeds.
 
 [`AbstractHDF5Vector`](@ref) supplies `eltype`, `size`, linear index style, range and logical indexing, broadcasting, `map`, reductions, iteration, and [`iterable`](@ref) in terms of the required methods.
 
@@ -172,4 +172,4 @@ This example intentionally relies on the generic element-by-element copy and doe
 
 ## Testing a Backend
 
-At minimum, test creating, pushing, scalar indexing, collecting, closing and reloading, and copying both empty and nonempty collections. Exercise both loading forms—with the stored element type and with an explicit element type—and verify that the physical HDF5 datasets contain the intended representation. If replacement is supported, test it both directly and as a field of a composite element.
+A useful minimum test set covers creating, pushing, scalar indexing, collecting, closing and reloading, and copying both empty and nonempty collections. Tests should exercise both loading forms—with the stored element type and with an explicit element type—and verify that the physical HDF5 datasets contain the intended representation. If replacement is supported, it is helpful to test it both directly and as a field of a composite element.

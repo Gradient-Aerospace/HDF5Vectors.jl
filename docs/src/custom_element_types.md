@@ -4,7 +4,7 @@
 CurrentModule = HDF5Vectors
 ```
 
-Most concrete structs work without customization when their fields have [supported types](supported_types.md). Define a custom storage rule only when the default field-oriented representation is unsuitable or the type needs a different reconstruction process.
+Most concrete structs work without customization when their fields have [supported types](supported_types.md). A custom storage rule is needed only when the default field-oriented representation is unsuitable or the type needs a different reconstruction process.
 
 ## Using the Default Composite Storage
 
@@ -26,11 +26,11 @@ HDF5.h5open("measurements.h5", "w") do file
 end
 ```
 
-The struct is stored field-by-field. Because no `dims` are declared for the `values` field, each `Vector{Float64}` is serialized independently. The other fields remain directly readable as HDF5 datasets. See [Field-Oriented Composite Values](storage_layout.md#Field-Oriented-Composite-Values) for their paths.
+The struct is stored field-by-field. Because no `dims` are declared for the `values` field, each `Vector{Float64}` is serialized independently. The other fields remain directly readable as HDF5 datasets. Their paths are described under [Field-Oriented Composite Values](storage_layout.md#Field-Oriented-Composite-Values).
 
 ## Selecting Julia Byte Serialization
 
-Define only [`storage_style`](@ref) to store an entire custom value with Julia's `Serialization` library:
+Only a [`storage_style`](@ref) method is needed to store an entire custom value with Julia's `Serialization` library:
 
 ```julia
 struct Snapshot
@@ -47,7 +47,7 @@ No [`construct`](@ref) or [`deconstruct`](@ref) method is needed because the byt
 
 ## Selecting JSON Storage
 
-[`JSONStorageStyle`](@ref) stores one JSON string per element. JSON3 must be a dependency of the calling project and must be loaded so that the HDF5Vectors JSON extension is available.
+[`JSONStorageStyle`](@ref) stores one JSON string per element. The calling project needs JSON3 as a dependency, and loading JSON3 makes the HDF5Vectors JSON extension available.
 
 ```julia
 import JSON3
@@ -65,7 +65,7 @@ The type must be supported by `JSON3.write` and `JSON3.read(..., ServerDetails)`
 
 ## Defining an Elemental Representation
 
-A custom type can reuse the elemental backend by specifying an HDF5 datatype and defining conversions between that stored datatype and the Julia value. This example stores grades as `UInt8` bytes:
+A custom type can reuse the elemental backend by specifying an HDF5 datatype and defining conversions between that stored datatype and the Julia value. In this example, we will store grades as `UInt8` bytes:
 
 ```julia
 struct Grade
@@ -111,7 +111,7 @@ end
 
 ## Customizing Composite Reconstruction
 
-Default composite reconstruction calls the declared element type with its stored field values in field order. If that constructor does not exist, define a more-specific [`construct`](@ref) method. For example, this type deliberately accepts one tuple rather than two scalar constructor arguments:
+Default composite reconstruction calls the declared element type with its stored field values in field order. If that constructor does not exist, a more-specific [`construct`](@ref) method can provide the appropriate reconstruction. For example, this type deliberately accepts one tuple rather than two scalar constructor arguments:
 
 ```julia
 struct PointFromTuple
@@ -131,10 +131,10 @@ function construct(
 end
 ```
 
-The default composite [`deconstruct`](@ref) method still reads `x` and `y` from the value. Define a custom `deconstruct` method as well only when the stored field values must be obtained differently.
+The default composite [`deconstruct`](@ref) method still reads `x` and `y` from the value. A custom `deconstruct` method is needed only when the stored field values must be obtained differently.
 
 ## Keeping Style Selection Reproducible
 
-[`storage_style`](@ref) is called when a vector is created and again when it is loaded. Custom methods should make the same choice from the element type and the supplied keyword options every time. Accept `kwargs...` even when the method does not currently use any options, as in the examples above.
+[`storage_style`](@ref) is called when a vector is created and again when it is loaded. Custom methods should make the same choice from the element type and the supplied keyword options every time. Including `kwargs...`, even when a method does not currently use any options, allows it to work with the ordinary interface as shown in the examples above.
 
 The built-in metadata preserves `dims` and `portable`. A custom storage backend can store additional options inside its own HDF5 group, but style selection during loading cannot depend on an option that is unavailable until after the style has been selected.

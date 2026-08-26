@@ -8,7 +8,7 @@ HDF5Vectors provides vectors whose underlying values live in an HDF5 file rather
 
 ## Installation
 
-Install HDF5Vectors from the Julia package prompt:
+HDF5Vectors can be installed from the Julia package prompt:
 
 ```
 pkg> add https://github.com/Gradient-Aerospace/HDF5Vectors.jl
@@ -16,7 +16,7 @@ pkg> add https://github.com/Gradient-Aerospace/HDF5Vectors.jl
 
 ## Getting Started
 
-Create an HDF5 vector by opening an HDF5 file, selecting the group that will contain it, and specifying its name and element type. This example creates `/x` and appends 100 `Float64` values:
+We can create an HDF5 vector by opening an HDF5 file, selecting the group that will contain it, and specifying its name and element type. This first example creates `/x` and appends 100 `Float64` values:
 
 ```julia
 import HDF5
@@ -30,9 +30,9 @@ HDF5.h5open("storage.h5", "w") do file
 end
 ```
 
-The `do` block closes the HDF5 file when the block finishes. An HDF5 vector uses objects owned by its open file, so use the vector only while that file remains open.
+The `do` block closes the HDF5 file when the block finishes. An HDF5 vector uses objects owned by its open file, so the vector can be used only while that file remains open.
 
-Open the file again and load the vector from its HDF5 group:
+We can now open the file again and load the vector from its HDF5 group:
 
 ```julia
 HDF5.h5open("storage.h5", "r") do file
@@ -48,7 +48,7 @@ The element type and creation options are stored in the HDF5 vector's metadata, 
 
 ## Copying an Existing Collection
 
-When all the values already exist in Julia, use [`copy_to_hdf5_vector`](@ref). Supported storage styles use bulk writes where possible, making this more efficient than calling `push!` for every value.
+When all the values already exist in Julia, [`copy_to_hdf5_vector`](@ref) can copy them into an HDF5 vector. Supported storage styles use bulk writes where possible, making this more efficient than calling `push!` for every value.
 
 ```julia
 source = Float64[1, 2, 3, 4]
@@ -63,7 +63,7 @@ The copied vector uses `eltype(source)` as its declared element type.
 
 ## Continuing to Add Values
 
-Open an existing file with write access to continue appending to a stored vector. HDF5 uses the mode `"r+"` for opening an existing file for both reading and writing.
+An existing file can be opened with write access when more values need to be appended to a stored vector. HDF5 uses the mode `"r+"` for opening an existing file for both reading and writing.
 
 ```julia
 HDF5.h5open("storage.h5", "r+") do file
@@ -114,7 +114,7 @@ HDF5.h5open("storage.h5", "r+") do file
 end
 ```
 
-Byte-array serialization is append-only and does not support replacement. A composite vector supports replacement only when the storage representation of every field supports it. See [Supported Element Types and Creation Options](supported_types.md) for the available representations.
+Byte-array serialization is append-only and does not support replacement. A composite vector supports replacement only when the storage representation of every field supports it. [Supported Element Types and Creation Options](supported_types.md) describes the available representations.
 
 ## Choosing Types and Understanding the HDF5 File
 

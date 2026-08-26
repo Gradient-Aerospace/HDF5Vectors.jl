@@ -106,7 +106,7 @@ end
 """
     storage_style(el_type::Type; dims = nothing, portable = true, kwargs...)
 
-Return the storage style used for vectors with the declared element type `el_type`.
+Returns the storage style used for vectors with the declared element type `el_type`.
 Built-in styles include:
 
 * `ElementalStorageStyle` for scalars or non-portable bits-type structs
@@ -120,7 +120,7 @@ Built-in styles include:
 selects field-oriented storage rather than a native HDF5 datatype for bits-type composite
 elements.
 
-Define a more-specific method to select a representation for a custom element type. Style
+A more-specific method can select a representation for a custom element type. Style
 selection occurs both when a vector is created and when it is loaded, so a custom method
 must return the same style from the element type and stored options.
 
@@ -130,8 +130,8 @@ For example, this selects Julia byte serialization for `MyType`:
 HDF5Vectors.storage_style(::Type{MyType}; kwargs...) = HDF5Vectors.ByteArrayStorageStyle()
 ```
 
-See [Supported Element Types and Creation Options](@ref) and [Custom Element Types](@ref)
-for the selection rules and customization examples.
+[Supported Element Types and Creation Options](@ref) and [Custom Element Types](@ref)
+describe the selection rules and provide customization examples.
 """
 function storage_style(el_type::Type; portable = true, kwargs...)
 
@@ -193,7 +193,7 @@ end
 """
     construct(type::Type, el)
 
-Create the appropriate Julia value from the raw element `el` retrieved from the
+Creates the appropriate Julia value from the raw element `el` retrieved from the
 HDF5 dataset. The behaviour is determined by the storage style associated with `type`.
 No generic implementation is provided; storage backends define methods for their
 particular container types and element representations.
@@ -203,7 +203,7 @@ function construct end
 """
     deconstruct(type::Type, el)
 
-Convert the Julia value `el` into the representation stored in the HDF5 file. The
+Converts the Julia value `el` into the representation stored in the HDF5 file. The
 storage style associated with `type` chooses how the conversion is performed. No generic
 implementation is provided; storage backends define methods for their particular
 container types and element representations.
@@ -233,7 +233,7 @@ Base.broadcastable(arr::AbstractHDF5Vector) = collect(arr)
 """
     supports_setindex(vector::AbstractHDF5Vector)
 
-Return whether `vector` supports replacing existing elements with `setindex!`. The default
+Returns whether `vector` supports replacing existing elements with `setindex!`. The default
 is `false`. A custom backend that implements replacement and can be nested in composite
 storage should define this to return `true`.
 """
@@ -363,7 +363,7 @@ end
         portable,
     )
 
-Store the common metadata required by `load_hdf5_vector` in a newly created HDF5 vector
+Stores the common metadata required by `load_hdf5_vector` in a newly created HDF5 vector
 group. This is an implementation hook for custom storage backends; ordinary callers do not
 need to call it.
 """
@@ -430,7 +430,7 @@ end
 """
     load_hdf5_vector(group::HDF5.Group)
 
-Reconstruct an HDF5 vector from a group created by `create_hdf5_vector`. The metadata stored
+Reconstructs an HDF5 vector from a group created by `create_hdf5_vector`. The metadata stored
 in the group (type, dimensions, portability) is used to determine which specific vector
 implementation to instantiate. This form takes only the `group` and pulls the element type
 from the metadata.
@@ -450,7 +450,7 @@ end
 """
     load_hdf5_vector(group::HDF5.Group, el_type)
 
-Reconstruct an HDF5 vector when the caller already knows the element type. When loading a
+Reconstructs an HDF5 vector when the caller already knows the element type. When loading a
 group created by `create_hdf5_vector`, its stored dimensions and portability setting are
 used to select the storage representation.
 """
@@ -1221,8 +1221,8 @@ end
 ######################
 
 """
-Used to store each vector element as a JSON string through JSON3. Load JSON3 before creating
-or loading a vector with this style.
+Used to store each vector element as a JSON string through JSON3. JSON3 needs to be loaded
+before a vector with this style is created or loaded.
 """
 struct JSONStorageStyle <: AbstractHDF5VectorStorageStyle end
 

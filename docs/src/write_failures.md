@@ -34,8 +34,8 @@ HDF5Vectors cannot catch an error when the Julia process no longer exists, and i
 
 ## What to Do After a Write Failure
 
-Validate application-specific constraints before calling `push!`, and prefer [`copy_to_hdf5_vector`](@ref) when a complete collection already exists and fits in memory. Specialized bulk-copy paths can detect more ordinary input errors before creating HDF5 storage.
+Application-specific constraints can be validated before `push!` is called. When a complete collection already exists and fits in memory, [`copy_to_hdf5_vector`](@ref) is another useful option because its specialized bulk-copy paths can detect more ordinary input errors before creating HDF5 storage.
 
-After a caught write or HDF5 error, do not assume that the affected vector is safe to keep using. Close the file normally when possible, reopen it, and call [`load_hdf5_vector`](@ref) to validate the stored layout. If loading fails or the values do not match the application's expectations, discard and recreate that vector from a trusted source or checkpoint.
+After a caught write or HDF5 error, the affected vector should not be assumed safe to keep using. When possible, the file can be closed normally and reopened, and [`load_hdf5_vector`](@ref) can then validate the stored layout. If loading fails or the values do not match the application's expectations, the safest recovery is to recreate that vector from a trusted source or checkpoint.
 
-For outputs that must survive interruption, keep the source data or periodic checkpoints needed to rebuild the current vector. At the application level, another option is to write a new HDF5 file and replace the previous completed file only after the new file has closed successfully.
+For outputs that must survive interruption, keeping the source data or periodic checkpoints makes it possible to rebuild the current vector. At the application level, another option is to write a new HDF5 file and replace the previous completed file only after the new file has closed successfully.

@@ -23,7 +23,7 @@ Every HDF5 vector occupies an HDF5 group. The group contains `metadata` and `dat
 
 Readers outside Julia usually need only the paths under `data`. The plain-text `metadata/type` value can be informative, but `metadata/serialized_type` uses Julia's `Serialization` format and is used by `load_hdf5_vector(group)` to reconstruct the Julia element type. Nested HDF5 vectors, such as the fields of a composite value, have their own `metadata` and `data` children.
 
-HDF5Vectors is intended to load trusted files. `load_hdf5_vector(group)` deserializes `metadata/serialized_type`; the explicit-type form `load_hdf5_vector(group, el_type)` avoids that metadata deserialization, but reading a vector with Julia byte serialization still deserializes its element values. Do not deserialize data from an untrusted HDF5 file.
+HDF5Vectors is intended to load trusted files. `load_hdf5_vector(group)` deserializes `metadata/serialized_type`; the explicit-type form `load_hdf5_vector(group, el_type)` avoids that metadata deserialization, but reading a vector with Julia byte serialization still deserializes its element values. Data from an untrusted HDF5 file should not be deserialized.
 
 ## Elemental Values
 
@@ -53,7 +53,7 @@ This layout is used for supported `SVector`, `SMatrix`, `SArray`, and homogeneou
 
 ## Field-Oriented Composite Values
 
-Portable composite storage gives every field its own nested HDF5 vector. Consider these Julia types:
+Portable composite storage gives every field its own nested HDF5 vector. These Julia types provide an example:
 
 ```julia
 struct MySubType
