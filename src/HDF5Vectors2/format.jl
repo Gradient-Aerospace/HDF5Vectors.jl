@@ -316,7 +316,7 @@ end
 
 function validate_stored_dense_dims(type::Type, dims::Tuple)
 
-    if isempty(dims) || !all(dimension -> dimension > 0, dims)
+    if !all(dimension -> dimension > 0, dims)
         throw(ArgumentError("Stored dense dimensions must be positive; got $dims."))
     elseif type <: Tuple
         expected_dims = (fieldcount(type),)

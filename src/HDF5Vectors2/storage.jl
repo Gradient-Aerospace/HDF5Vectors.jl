@@ -11,6 +11,11 @@ struct ScalarStore{H} <: AbstractStore
     dataset::HDF5.Dataset
 end
 
+struct DenseStore{H, N} <: AbstractStore
+    dataset::HDF5.Dataset
+    dims::NTuple{N, Int}
+end
+
 struct ConstantStore <: AbstractStore
     group::HDF5.Group
 end
@@ -74,6 +79,27 @@ end
 
 function create_store(
     group::HDF5.Group,
+    schema::DenseSchema{T, E, H, N};
+    chunk_length,
+) where {T, E, H, N}
+
+    chunk_length = validate_chunk_length(chunk_length)
+    initial_dims = (schema.dims..., 0)
+    maximum_dims = (schema.dims..., -1)
+    dataspace = HDF5.dataspace(initial_dims, maximum_dims)
+    dataset = HDF5.create_dataset(
+        group,
+        "values",
+        H,
+        dataspace;
+        chunk = (schema.dims..., chunk_length),
+    )
+    return DenseStore{H, N}(dataset, schema.dims)
+
+end
+
+function create_store(
+    group::HDF5.Group,
     ::ConstantSchema;
     chunk_length,
 )
@@ -102,6 +128,32 @@ function open_store(group::HDF5.Group, ::ScalarSchema{T, H}) where {T, H}
 
 end
 
+function open_store(
+    group::HDF5.Group,
+    schema::DenseSchema{T, E, H, N},
+) where {T, E, H, N}
+
+    validate_store_children(group, ("values",))
+    dataset = group["values"]
+    if ndims(dataset) != N + 1
+        throw(DimensionMismatch(
+            "Dense storage for $T must have $(N + 1) dimensions, but its size is " *
+            "$(size(dataset)).",
+        ))
+    elseif size(dataset)[1:N] != schema.dims
+        throw(DimensionMismatch(
+            "Dense storage for $T must have leading dimensions $(schema.dims), but " *
+            "its size is $(size(dataset)).",
+        ))
+    elseif !dataset_matches_encoded_type(dataset, H)
+        throw(ArgumentError(
+            "Dense storage does not use the HDF5 datatype required for $H.",
+        ))
+    end
+    return DenseStore{H, N}(dataset, schema.dims)
+
+end
+
 function open_store(group::HDF5.Group, ::ConstantSchema)
     validate_store_children(group, ())
     return ConstantStore(group)
@@ -112,9 +164,10 @@ end
 ###########################
 
 physical_length(store::ScalarStore) = length(store.dataset)
+physical_length(store::DenseStore{H, N}) where {H, N} = size(store.dataset, N + 1)
 physical_length(::ConstantStore) = nothing
 
-function validate_write_start(store::ScalarStore, start::Int)
+function validate_write_start(store::Union{ScalarStore, DenseStore}, start::Int)
     current_length = physical_length(store)
     if start < 1 || start > current_length + 1
         throw(BoundsError(1:(current_length + 1), start))
@@ -173,6 +226,131 @@ function truncate_store!(store::ScalarStore, count::Int)
         throw(BoundsError(0:current_length, count))
     end
     HDF5.set_extent_dims(store.dataset, (count,))
+    return store
+end
+
+##########################
+# Dense Store Operations #
+##########################
+
+# A dense dataset stacks fixed-size encoded frames along its final dimension. Keeping the
+# frame dimensions on the store makes the checks below independent of logical Julia types
+# and codecs.
+dense_colons(::DenseStore{H, N}) where {H, N} = ntuple(_ -> Colon(), N)
+dense_extent(store::DenseStore, count::Int) = (store.dims..., count)
+
+function validate_dense_frame(store::DenseStore, frame::Array)
+    if size(frame) != store.dims
+        throw(DimensionMismatch(
+            "Expected an encoded frame with dimensions $(store.dims), but got " *
+            "$(size(frame)).",
+        ))
+    end
+    return frame
+end
+
+function write_encoded!(
+    store::DenseStore{H, N},
+    index::Int,
+    frame::Array{H, N},
+) where {H, N}
+
+    # Validation happens before extending the dataset. A rejected frame therefore cannot
+    # leave an unwritten physical slot at the end of the store.
+    validate_dense_frame(store, frame)
+    current_length = validate_write_start(store, index)
+    if index > current_length
+        HDF5.set_extent_dims(store.dataset, dense_extent(store, index))
+    end
+
+    selection = (dense_colons(store)..., index:index)
+    store.dataset[selection...] = reshape(frame, (store.dims..., 1))
+    return store
+
+end
+
+function stack_dense_frames(
+    store::DenseStore{H, N},
+    frames::AbstractVector{<:Array{H, N}},
+) where {H, N}
+
+    # Every frame is checked before allocating or writing the stacked HDF5 representation.
+    # This matters for dynamic Arrays, whose dimensions are not guaranteed by their type.
+    for frame in frames
+        validate_dense_frame(store, frame)
+    end
+
+    stacked = Array{H, N + 1}(undef, (store.dims..., length(frames)))
+    for (index, frame) in enumerate(frames)
+        copyto!(selectdim(stacked, N + 1, index), frame)
+    end
+    return stacked
+
+end
+
+function write_encoded_batch!(
+    store::DenseStore{H, N},
+    start::Int,
+    frames::AbstractVector{<:Array{H, N}},
+) where {H, N}
+
+    current_length = validate_write_start(store, start)
+    if isempty(frames)
+        return store
+    end
+
+    # Stacking validates the complete batch before the dataset extent changes.
+    stacked = stack_dense_frames(store, frames)
+    final_index = start + length(frames) - 1
+    if final_index > current_length
+        HDF5.set_extent_dims(store.dataset, dense_extent(store, final_index))
+    end
+
+    selection = (dense_colons(store)..., start:final_index)
+    store.dataset[selection...] = stacked
+    return store
+
+end
+
+function read_encoded(store::DenseStore{H, N}, index::Int) where {H, N}
+
+    if index < 1 || index > physical_length(store)
+        throw(BoundsError(store, index))
+    end
+
+    # Reading a one-element range preserves the final dimension. Dropping it explicitly
+    # then returns an N-dimensional Array even for the unusual zero-dimensional case.
+    selection = (dense_colons(store)..., index:index)
+    stacked = read(store.dataset, H, selection...)
+    return dropdims(stacked; dims = N + 1)
+
+end
+
+function read_encoded(
+    store::DenseStore{H, N},
+    indices::UnitRange{Int},
+) where {H, N}
+
+    if isempty(indices)
+        return Array{H, N}[]
+    elseif first(indices) < 1 || last(indices) > physical_length(store)
+        throw(BoundsError(store, indices))
+    end
+
+    # The storage layer returns independent frames, matching the scalar store's vector of
+    # encoded values and preventing a decoded mutable Array from aliasing a larger buffer.
+    selection = (dense_colons(store)..., indices)
+    stacked = read(store.dataset, H, selection...)
+    return [Array(selectdim(stacked, N + 1, index)) for index in 1:length(indices)]
+
+end
+
+function truncate_store!(store::DenseStore, count::Int)
+    current_length = physical_length(store)
+    if count < 0 || count > current_length
+        throw(BoundsError(0:current_length, count))
+    end
+    HDF5.set_extent_dims(store.dataset, dense_extent(store, count))
     return store
 end
 
