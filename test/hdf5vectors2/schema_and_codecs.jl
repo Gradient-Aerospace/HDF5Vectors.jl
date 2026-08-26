@@ -79,6 +79,7 @@ end
         # as the HDF5 datatype.
         tuple_schema = infer_schema(NTuple{2, Char})
         static_schema = infer_schema(StaticArrays.SVector{2, PrototypeUInt8Enum})
+        string_static_schema = infer_schema(StaticArrays.SVector{2, String})
         array_schema = infer_schema(Vector{Char}; dims = (2,))
 
         @test tuple_schema isa DenseSchema
@@ -110,7 +111,27 @@ end
         @test HDF5Vectors2.decode_batch(static_schema, static_batch) == static_values
         @test HDF5Vectors2.decode_batch(tuple_schema, char_batch) == char_values
 
+        # Non-bits static arrays cannot use the contiguous reinterpretation fast path, but
+        # they retain the same dense batch interface through frame-by-frame reconstruction.
+        string_static_values = [
+            StaticArrays.SVector("first", "second"),
+            StaticArrays.SVector("third", "fourth"),
+        ]
+        string_static_batch = HDF5Vectors2.encode_batch(
+            string_static_schema,
+            string_static_values,
+        )
+        @test HDF5Vectors2.decode_batch(
+            string_static_schema,
+            string_static_batch,
+        ) == string_static_values
+
         @test_throws DimensionMismatch encode_value(array_schema, ['a'])
+        @test_throws DimensionMismatch decode_value(array_schema, Int32[Int('a')])
+        @test_throws DimensionMismatch HDF5Vectors2.decode_batch(
+            static_schema,
+            zeros(UInt8, 3, 2),
+        )
         @test_throws DimensionMismatch infer_schema(Vector{Char}; dims = (2, 1))
         @test_throws ArgumentError infer_schema(Vector{Char}; dims = (0,))
 

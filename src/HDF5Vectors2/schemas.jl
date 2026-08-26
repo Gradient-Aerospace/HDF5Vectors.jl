@@ -200,6 +200,7 @@ function decode_value(
     end
 
 end
+
 function decompose_record(schema::RecordSchema{T, N}, value::T) where {T, N}
 
     fields = decompose(schema.codec, value)
@@ -309,7 +310,7 @@ function encode_batch(
 
 end
 
-function decode_batch(
+function validate_dense_batch_encoding(
     schema::DenseSchema{T, E, H, N},
     stacked::Array{H, M},
 ) where {T, E, H, N, M}
@@ -324,14 +325,51 @@ function decode_batch(
             "$(size(stacked)).",
         ))
     end
+    return size(stacked, N + 1)
+
+end
+
+function decode_dense_batch_by_frame(
+    schema::DenseSchema{T},
+    stacked::Array,
+    count::Int,
+) where {T}
 
     # Each view borrows the HDF5 read buffer only during reconstruction. Dynamic Arrays
     # receive their own copy, while tuples and static arrays copy into inline storage.
-    values = Vector{T}(undef, size(stacked, N + 1))
+    final_dimension = ndims(stacked)
+    values = Vector{T}(undef, count)
     for index in eachindex(values)
-        values[index] = decode_value(schema, selectdim(stacked, N + 1, index))
+        values[index] = decode_value(
+            schema,
+            selectdim(stacked, final_dimension, index),
+        )
     end
     return values
+
+end
+
+function decode_batch(
+    schema::DenseSchema{T, E, H, N},
+    stacked::Array{H, M},
+) where {T, E, H, N, M}
+    count = validate_dense_batch_encoding(schema, stacked)
+    return decode_dense_batch_by_frame(schema, stacked, count)
+end
+
+function decode_batch(
+    schema::DenseSchema{T, E, E, N, IdentityCodec{E}},
+    stacked::Array{E, M},
+) where {T <: StaticArrays.SArray, E, N, M}
+
+    count = validate_dense_batch_encoding(schema, stacked)
+    # Immutable bits-backed static arrays store their elements inline in the same
+    # column-major order used by the dense HDF5 frame. Reinterpreting the complete buffer
+    # and then collecting it performs one contiguous copy into `Vector{T}`.
+    if isbitstype(T) && sizeof(T) == prod(schema.dims) * sizeof(E)
+        return collect(reinterpret(T, vec(stacked)))
+    end
+    return decode_dense_batch_by_frame(schema, stacked, count)
 
 end
 
