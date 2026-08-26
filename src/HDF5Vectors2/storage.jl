@@ -1041,3 +1041,64 @@ function truncate_store!(store::ConstantStore, count::Int)
     end
     return store
 end
+
+###############################
+# Known-Position Append Writes #
+###############################
+
+# `HDF5Vector` validates physical lengths when it is created or loaded and owns the
+# logical count while it remains open. After schema encoding has completed, these methods
+# can extend directly to the known next index. The more general `write_encoded!` methods
+# above retain physical bounds checks for replacement and low-level storage use.
+function append_encoded!(store::ScalarStore{H}, index::Int, value::H) where {H}
+    HDF5.set_extent_dims(store.dataset, (index,))
+    store.dataset[index] = value
+    return store
+end
+
+function append_encoded!(
+    store::DenseStore{H, N},
+    index::Int,
+    frame::Array{H, N},
+) where {H, N}
+    HDF5.set_extent_dims(store.dataset, dense_extent(store, index))
+    selection = (dense_colons(store)..., index:index)
+    store.dataset[selection...] = reshape(frame, (store.dims..., 1))
+    return store
+end
+
+function append_encoded!(store::BlobStore, index::Int, value::Vector{UInt8})
+
+    # The byte dataset's current extent is also the next cumulative stop. Creation and
+    # loading have already checked that it agrees with the preceding stored stop, so the
+    # append path does not need to read that stop again.
+    initial_stop = Int64(length(store.bytes))
+    final_stop = Base.Checked.checked_add(initial_stop, Int64(length(value)))
+    if !isempty(value)
+        HDF5.set_extent_dims(store.bytes, (final_stop,))
+        store.bytes[(initial_stop + 1):final_stop] = value
+    end
+
+    HDF5.set_extent_dims(store.stops, (index,))
+    store.stops[index] = final_stop
+    return store
+
+end
+
+function append_encoded!(store::RecordStore, index::Int, value::Tuple)
+
+    # Encoding has recursively prepared every field before this method begins. Passing the
+    # known index down the store tree avoids re-reading every child length at each record
+    # level and again inside each leaf write.
+    for child_index in eachindex(store.children)
+        append_encoded!(
+            store.children[child_index],
+            index,
+            value[child_index],
+        )
+    end
+    return store
+
+end
+
+append_encoded!(store::ConstantStore, ::Int, ::Nothing) = store

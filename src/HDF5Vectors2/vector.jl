@@ -183,8 +183,8 @@ function Base.push!(vector::HDF5Vector{T}, value::T) where {T}
     # physical storage changes. The logical count is persisted only after the value write
     # succeeds, and the in-memory count changes last.
     encoded = encode_value(vector.schema, value)
-    next_count = vector.count + 1
-    write_encoded!(vector.store, next_count, encoded)
+    next_count = Base.Checked.checked_add(vector.count, 1)
+    append_encoded!(vector.store, next_count, encoded)
     persist_count!(vector, next_count)
     return vector
 

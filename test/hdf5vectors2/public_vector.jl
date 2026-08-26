@@ -54,7 +54,18 @@ function test_public_hdf5_vector(
         kwargs...,
     )
     @test collect(copied) == source
-    @test collect(HDF5Vectors2.load_hdf5_vector(file[name * "_copy"])) == source
+    reloaded_copy = HDF5Vectors2.load_hdf5_vector(file[name * "_copy"])
+    @test collect(reloaded_copy) == source
+
+    # A loaded vector has validated its physical layout and can continue appending from
+    # its stored logical count. Running this for every nonempty representation checks the
+    # optimized known-position append path after both creation and loading.
+    if !isempty(source)
+        push!(reloaded_copy, last(source))
+        expected = copy(source)
+        push!(expected, last(source))
+        @test collect(reloaded_copy) == expected
+    end
 
 end
 
