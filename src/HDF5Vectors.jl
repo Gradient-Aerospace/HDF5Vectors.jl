@@ -206,7 +206,8 @@ function construct end
 Converts the Julia value `el` into the representation stored in the HDF5 file. The
 storage style associated with `type` chooses how the conversion is performed. No generic
 implementation is provided; storage backends define methods for their particular
-container types and element representations.
+container types and element representations. For composite storage, the result contains
+one stored value for each declared field, in field order.
 """
 function deconstruct end
 
@@ -1140,21 +1141,39 @@ function copy_to_hdf5_vector(
 
     el_type = eltype(collection)
     n = length(collection)
+
+    # Composite deconstruct methods return the stored value for each declared field, in
+    # field order. The default method simply reads the fields, but a custom method can
+    # transform or derive them. Calling deconstruct exactly once for each element keeps
+    # bulk copying consistent with push! and avoids repeating work or observable side
+    # effects for every field.
+    vector_type = HDF5VectorOfCompositeTypes{el_type}
+    deconstructed_values = [deconstruct(vector_type, el) for el in collection]
+
     this_group = create_group(group, name)
     store_metadata(style, this_group, el_type; portable)
     data_group = create_group(this_group, "data")
 
-    # Use each declared field type for its collection. In particular, an abstract field's
-    # runtime values must not narrow the storage style away from the one used when loading.
+    # The deconstructed values form rows: one row for each element and one entry for each
+    # field. Each child HDF5 vector instead needs a column containing one field from every
+    # element. The field index performs that row-to-column rearrangement.
+    #
+    # Construct each column with its declared field type. This matters for abstract fields:
+    # using only the runtime values could select a narrower storage style that would differ
+    # from the declared style selected again when the parent vector is loaded.
     return HDF5VectorOfCompositeTypes{el_type}(
         [
             copy_to_hdf5_vector(
                 data_group,
-                string(fn),
-                field_type[getproperty(el, fn) for el in collection];
+                string(field_name),
+                field_type[
+                    values[field_index] for values in deconstructed_values
+                ];
                 chunk_length,
                 portable,
-            ) for (fn, field_type) in zip(fieldnames(el_type), fieldtypes(el_type))
+            ) for (field_index, (field_name, field_type)) in enumerate(
+                zip(fieldnames(el_type), fieldtypes(el_type)),
+            )
         ],
         n,
     )
@@ -1191,6 +1210,7 @@ function supports_setindex(arr::HDF5VectorOfCompositeTypes)
 end
 
 function Base.setindex!(arr::HDF5VectorOfCompositeTypes{T}, el::T, k::Int) where {T}
+
     checkbounds(arr, k)
     if !supports_setindex(arr)
         throw(ArgumentError(
@@ -1198,18 +1218,30 @@ function Base.setindex!(arr::HDF5VectorOfCompositeTypes{T}, el::T, k::Int) where
             "append-only storage.",
         ))
     end
-    for (sub_array, fn) in zip(arr.arrays, fieldnames(T))
-        setindex!(sub_array, getproperty(el, fn), k)
+
+    # Replacement must use the same representation as push! and bulk copy. Reading fields
+    # with getproperty here would bypass a custom deconstruct method and could store a value
+    # that construct later interprets incorrectly. Deconstruct once before the first child
+    # write so the transformation itself cannot fail after an earlier field was replaced.
+    values = deconstruct(typeof(arr), el)
+    for (sub_array, value) in zip(arr.arrays, values)
+        setindex!(sub_array, value, k)
     end
     return el
+
 end
 
 function Base.push!(arr::HDF5VectorOfCompositeTypes{T}, el::T) where {T}
-    for (sub_array, value) in zip(arr.arrays, deconstruct(typeof(arr), el))
+
+    # Each field has its own child HDF5 vector. deconstruct supplies the values for those
+    # children in field order and allows custom types to transform their stored fields.
+    values = deconstruct(typeof(arr), el)
+    for (sub_array, value) in zip(arr.arrays, values)
         push!(sub_array, value)
     end
     arr.count += 1
     return arr
+
 end
 
 # Default composite reconstruction calls the element type with its field values. Types that

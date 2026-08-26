@@ -139,6 +139,25 @@ function HDF5Vectors.deconstruct(
 
 end
 
+# This type deliberately stores a value that differs from its Julia field. It lets the
+# tests distinguish write paths that honor the composite deconstruct interface from paths
+# that incorrectly read the field with getproperty.
+struct MyOffsetCompositeType
+    value::Int64
+end
+function HDF5Vectors.construct(
+    ::Type{HDF5Vectors.HDF5VectorOfCompositeTypes{MyOffsetCompositeType}},
+    values,
+)
+    return MyOffsetCompositeType(values[1] - 100)
+end
+function HDF5Vectors.deconstruct(
+    ::Type{HDF5Vectors.HDF5VectorOfCompositeTypes{MyOffsetCompositeType}},
+    el::MyOffsetCompositeType,
+)
+    return (el.value + 100,)
+end
+
 struct MyNoncreteType
     x::NamedTuple
 end
@@ -549,6 +568,40 @@ end
         HDF5.set_extent_dims(empty_bytes, (1,))
         empty_bytes[1] = 0x00
         @test_throws DimensionMismatch load_hdf5_vector(fid["invalid_empty_serialized"])
+
+    end
+
+end
+
+@testset "custom composite deconstruction" begin
+
+    h5open("$out_dir/custom_composite_deconstruction.h5", "w") do fid
+
+        # push!, setindex!, and copy_to_hdf5_vector are three ways to write a composite
+        # value. They must all pass through the same deconstruct hook so custom stored
+        # representations do not depend on which public operation the caller chooses.
+        original = MyOffsetCompositeType(1)
+        replacement = MyOffsetCompositeType(2)
+
+        values = create_hdf5_vector(fid["/"], "values", MyOffsetCompositeType)
+        push!(values, original)
+        @test values[1] == original
+        @test read(fid["values/data/value/data"]) == [101]
+
+        # Replacement must apply the transformation too. Reading the logical value alone
+        # is not sufficient evidence because construct performs the inverse transformation;
+        # checking the raw child dataset confirms which representation was actually stored.
+        values[1] = replacement
+        @test values[1] == replacement
+        @test read(fid["values/data/value/data"]) == [102]
+
+        # Bulk copy prepares a typed collection for each field. It should obtain those field
+        # values from deconstruct rather than bypassing customization with getproperty.
+        source = [original, replacement]
+        copied = copy_to_hdf5_vector(fid["/"], "copied_values", source)
+        @test collect(copied) == source
+        @test read(fid["copied_values/data/value/data"]) == [101, 102]
+        @test collect(load_hdf5_vector(fid["copied_values"])) == source
 
     end
 
