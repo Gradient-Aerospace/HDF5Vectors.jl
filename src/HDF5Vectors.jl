@@ -92,6 +92,13 @@ end
 
 singleton_value(::Type{NamedTuple{(), Tuple{}}}) = (;)
 
+# Count-only singleton storage requires a public way to reconstruct the value from its type.
+# The empty named tuple is the one supported exception to the usual zero-argument
+# constructor: its public literal syntax is available, but its type is not callable without
+# arguments.
+supports_singleton_storage(::Type{T}) where {T} = applicable(T)
+supports_singleton_storage(::Type{NamedTuple{(), Tuple{}}}) = true
+
 function unsupported_element_type(el_type, reason)
     throw(ArgumentError(
         "HDF5Vectors does not support the element type $el_type: $reason " *
@@ -110,7 +117,7 @@ Returns the storage style used for vectors with the declared element type `el_ty
 Built-in styles include:
 
 * `ElementalStorageStyle` for scalars or non-portable bits-type structs
-* `SingletonStorageStyle` for types that have exactly one possible value
+* `SingletonStorageStyle` for directly reconstructible types with one possible value
 * `ArrayStorageStyle` for arrays of known, consistent dimensions holding elemental types
 * `CompositeStorageStyle` for field-oriented structs and heterogeneous tuples
 * `ByteArrayStorageStyle` for Julia serialization
@@ -141,12 +148,21 @@ function storage_style(el_type::Type; portable = true, kwargs...)
     # We can figure out the fields of concrete types.
     if isconcretetype(el_type)
 
-        if Base.issingletontype(el_type)
+        if Base.issingletontype(el_type) && supports_singleton_storage(el_type)
 
-            # Singleton values need no per-element storage, but we must be able to construct
-            # the value through a public interface when loading the vector.
+            # Directly reconstructible singleton values need no per-element storage. Calling
+            # singleton_value here also verifies that a zero-argument constructor returns
+            # the declared type.
             singleton_value(el_type)
             return SingletonStorageStyle()
+
+        elseif Base.issingletontype(el_type) && !isempty(fieldnames(el_type))
+
+            # Some singleton types, including heterogeneous tuples of singleton values,
+            # lack a zero-argument constructor but have fields from which their value can
+            # be reconstructed. Composite storage provides that reconstruction and avoids
+            # asking HDF5 to represent a zero-size native datatype when portable is false.
+            return CompositeStorageStyle()
 
         elseif isprimitivetype(el_type)
 
@@ -161,10 +177,17 @@ function storage_style(el_type::Type; portable = true, kwargs...)
         elseif isempty(fieldnames(el_type))
 
             # Mutable zero-field structs have distinct identities despite carrying no
-            # fields. There is no value representation that this package can preserve.
+            # fields. An immutable singleton can also reach this branch when it has no
+            # public way to reconstruct its value. Neither case has fields that could
+            # provide an alternative composite representation.
+            reason = if Base.issingletontype(el_type)
+                "its value cannot be reconstructed with a zero-argument constructor."
+            else
+                "it has no fields but is not a singleton type."
+            end
             return unsupported_element_type(
                 el_type,
-                "it has no fields but is not a singleton type.",
+                reason,
             )
 
         elseif isbitstype(el_type) && !portable

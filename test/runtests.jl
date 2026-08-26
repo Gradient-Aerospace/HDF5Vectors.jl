@@ -205,6 +205,15 @@ struct MySingletonWithoutZeroArgumentConstructor
     MySingletonWithoutZeroArgumentConstructor(::Nothing) = new()
 end
 
+# These types reproduce a downstream use case in which a heterogeneous tuple has exactly
+# one possible value, but the tuple type itself has no zero-argument constructor. Its two
+# fields can still be stored and reconstructed through composite storage.
+struct MyParametricSingleton1{Whatever}
+end
+
+struct MyParametricSingleton2{Whatever}
+end
+
 mutable struct MyMutableZeroFieldType
 end
 
@@ -436,6 +445,22 @@ end
         test_collection(fid, "structs", [MyType(k, 2k) for k in 1:11])
         test_collection(fid, "structs_of_structs", [MyTypeOfTypes(SA_F64[k, 2k, 3k], MyType(k, 2k)) for k in 1:11])
         test_collection(fid, "non_bits_structs", [MyNonBitsType(string(k), [k, 2k, 3k]) for k in 1:11])
+
+        # A field-bearing singleton that lacks a zero-argument constructor cannot use
+        # count-only singleton storage. Composite storage can reconstruct it from its
+        # singleton fields, and should do so regardless of the portability option.
+        singleton_tuple = (MyParametricSingleton1{:a}(), MyParametricSingleton2{:b}())
+        singleton_tuple_type = typeof(singleton_tuple)
+        @test Base.issingletontype(singleton_tuple_type)
+        @test !applicable(singleton_tuple_type)
+        selected_style = HDF5Vectors.storage_style(singleton_tuple_type; portable)
+        @test selected_style isa HDF5Vectors.CompositeStorageStyle
+        test_collection(
+            fid,
+            "field_bearing_singleton_tuple",
+            fill(singleton_tuple, 3);
+            create_kwargs,
+        )
 
         # composite representation of SMatrix/SArray when element type is non-elemental
         test_collection(fid, "smatrix_of_mytype", [SMatrix{2, 2, MyType, 4}((MyType(k,k), MyType(k+1,k+1), MyType(k+2,k+2), MyType(k+3,k+3))) for k in 1:5]; create_kwargs)

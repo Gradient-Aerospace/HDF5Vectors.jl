@@ -95,7 +95,9 @@ Bits-type structs can instead use one native HDF5 datatype when created with `po
 
 ## Singleton Types
 
-Singleton types have only one possible value, so HDF5Vectors stores the vector length rather than repeating that value. Supported examples include `Nothing`, empty tuples and named tuples, empty static arrays, and immutable zero-field marker types with zero-argument constructors.
+Singleton types that HDF5Vectors can reconstruct directly from their type use count-only storage: the package stores the vector length rather than repeating the value. Supported examples include `Nothing`, empty tuples and named tuples, empty static arrays, and immutable zero-field marker types with zero-argument constructors.
+
+A field-bearing singleton type without a zero-argument constructor can instead use composite storage when all of its fields are supported. For example, a heterogeneous tuple of singleton values is stored field-by-field and reconstructed as a tuple when loaded.
 
 Mutable zero-field types are not supported because separate instances have distinct identities that cannot be represented by storing only a count.
 
