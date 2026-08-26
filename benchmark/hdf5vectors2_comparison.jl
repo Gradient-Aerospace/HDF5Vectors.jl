@@ -106,13 +106,13 @@ function push_prototype(path, source, options)
     end
 end
 
-function collect_existing(path)
+function load_and_collect_existing(path)
     return HDF5.h5open(path, "r") do file
         return collect(HDF5Vectors.load_hdf5_vector(file["values"]))
     end
 end
 
-function collect_prototype(path)
+function load_and_collect_prototype(path)
     return HDF5.h5open(path, "r") do file
         return collect(HDF5Vectors2.load_hdf5_vector(file["values"]))
     end
@@ -136,8 +136,8 @@ function benchmark_workload(
 
     # Correctness is checked before timing so a fast but incorrect implementation cannot
     # produce a persuasive benchmark result.
-    existing_values = collect_existing(existing_collect_path)
-    prototype_values = collect_prototype(prototype_collect_path)
+    existing_values = load_and_collect_existing(existing_collect_path)
+    prototype_values = load_and_collect_prototype(prototype_collect_path)
     @assert existing_values == source
     @assert prototype_values == source
 
@@ -158,15 +158,44 @@ function benchmark_workload(
         path = next_path(directory, prefix * "_prototype_push", counter)
         return push_prototype(path, push_source, options)
     end
-    existing_collect = measure(() -> collect_existing(existing_collect_path); samples)
-    prototype_collect = measure(() -> collect_prototype(prototype_collect_path); samples)
+    existing_load_and_collect = measure(
+        () -> load_and_collect_existing(existing_collect_path);
+        samples,
+    )
+    prototype_load_and_collect = measure(
+        () -> load_and_collect_prototype(prototype_collect_path);
+        samples,
+    )
+
+    # Keeping both files open separates value reading and reconstruction from schema
+    # loading. The end-to-end measurement above remains important for short-lived readers,
+    # while this one represents repeated analysis of an already loaded vector.
+    existing_file = HDF5.h5open(existing_collect_path, "r")
+    prototype_file = HDF5.h5open(prototype_collect_path, "r")
+    existing_collect, prototype_collect = try
+        existing_vector = HDF5Vectors.load_hdf5_vector(existing_file["values"])
+        prototype_vector = HDF5Vectors2.load_hdf5_vector(prototype_file["values"])
+        (
+            measure(() -> collect(existing_vector); samples),
+            measure(() -> collect(prototype_vector); samples),
+        )
+    finally
+        close(existing_file)
+        close(prototype_file)
+    end
 
     return (
         (; name, operation = "copy", existing = existing_copy, prototype = prototype_copy),
         (; name, operation = "push", existing = existing_push, prototype = prototype_push),
         (;
             name,
-            operation = "collect",
+            operation = "load + collect",
+            existing = existing_load_and_collect,
+            prototype = prototype_load_and_collect,
+        ),
+        (;
+            name,
+            operation = "collect loaded",
             existing = existing_collect,
             prototype = prototype_collect,
         ),
@@ -184,9 +213,10 @@ function print_results(results, bulk_count, push_count, samples)
     println()
     println(
         rpad("workload", 22),
-        rpad("operation", 12),
+        rpad("operation", 17),
         lpad("existing ms", 14),
         lpad("prototype ms", 14),
+        lpad("delta ms", 12),
         lpad("time ratio", 14),
         lpad("existing MiB", 14),
         lpad("prototype MiB", 14),
@@ -200,9 +230,10 @@ function print_results(results, bulk_count, push_count, samples)
         prototype_mib = result.prototype.bytes / 2.0^20
         println(
             rpad(result.name, 22),
-            rpad(result.operation, 12),
+            rpad(result.operation, 17),
             lpad(round(existing_ms; digits = 2), 14),
             lpad(round(prototype_ms; digits = 2), 14),
+            lpad(round(prototype_ms - existing_ms; digits = 2), 12),
             lpad(round(prototype_ms / existing_ms; digits = 2), 14),
             lpad(round(existing_mib; digits = 2), 14),
             lpad(round(prototype_mib; digits = 2), 14),
@@ -214,9 +245,9 @@ end
 
 function main()
 
-    bulk_count = 5_000
-    push_count = 500
-    samples = 3
+    bulk_count = 100_000
+    push_count = 2_000
+    samples = 7
     measurements = [
         BenchmarkMeasurement(
             BenchmarkTimestamp(Int32(index ÷ 100), Int64(index * 1_000)),
@@ -225,8 +256,8 @@ function main()
         ) for index in 1:bulk_count
     ]
 
-    # These workloads cover every physical storage shape and both representations of
-    # ordinary bits structs. The public comparison tests contain the wider type matrix.
+    # These are the package's primary logging workloads. The behavioral comparison tests
+    # retain the wider type and operation matrix, including constants and serialization.
     workloads = (
         ("scalar", Float64.(1:bulk_count), (; portable = true)),
         (
@@ -235,22 +266,13 @@ function main()
             (; portable = true),
         ),
         ("portable record", measurements, (; portable = true)),
-        ("native record", measurements, (; portable = false)),
-        (
-            "serialized array",
-            [
-                Float64[index + offset for offset in 1:(index % 8 + 1)]
-                for index in 1:bulk_count
-            ],
-            (; portable = true),
-        ),
-        ("constant", fill(Val(:ready), bulk_count), (; portable = true)),
     )
 
     results = NamedTuple[]
 
-    # Every timed write receives a new path, while collect repeatedly opens the same
-    # completed file. The temporary directory is removed after all samples finish.
+    # Every timed write receives a new path. End-to-end collection repeatedly opens the
+    # same completed file, while loaded collection keeps one vector open. The temporary
+    # directory is removed after all samples finish.
     mktempdir() do directory
         for (name, source, options) in workloads
             append!(
