@@ -6,3 +6,4 @@ import StaticArrays
 
 include("schema_and_codecs.jl")
 include("format.jl")
+include("scalar_and_constant_storage.jl")

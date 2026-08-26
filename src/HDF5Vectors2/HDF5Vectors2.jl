@@ -8,6 +8,7 @@ include("codecs.jl")
 include("schemas.jl")
 include("inference.jl")
 include("format.jl")
+include("storage.jl")
 
 export AbstractCodec, AbstractRecordCodec, AbstractSchema
 export ScalarSchema, DenseSchema, RecordSchema, BlobSchema, ConstantSchema
