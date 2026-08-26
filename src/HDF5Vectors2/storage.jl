@@ -110,7 +110,7 @@ function create_store(
 
     chunk_length = validate_chunk_length(chunk_length)
     children = ntuple(N) do index
-        child_group = HDF5.create_group(group, string(index))
+        child_group = HDF5.create_group(group, schema.names[index])
         return create_store(
             child_group,
             schema.children[index];
@@ -182,10 +182,9 @@ function open_store(
     schema::RecordSchema{T, N},
 ) where {T, N}
 
-    child_names = ntuple(index -> string(index), N)
-    validate_store_children(group, child_names)
+    validate_store_children(group, schema.names)
     children = ntuple(N) do index
-        return open_store(group[string(index)], schema.children[index])
+        return open_store(group[schema.names[index]], schema.children[index])
     end
 
     # All nonconstant columns must describe the same number of records. Running this check

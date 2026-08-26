@@ -108,6 +108,24 @@ end
         @test sample_schema.children[2] isa ScalarSchema
         @test sample_schema.children[3] isa BlobSchema
 
+        # Physical record columns use these names as HDF5 path components. Rejecting names
+        # that are ambiguous or unsafe keeps the stored layout readable without requiring
+        # an escaping convention.
+        for invalid_names in (
+            ("x", "x"),
+            ("", "y"),
+            (".", "y"),
+            ("x/y", "y"),
+            ("x\0z", "y"),
+        )
+            @test_throws ArgumentError RecordSchema(
+                PrototypePoint,
+                invalid_names,
+                point_schema.codec,
+                point_schema.children,
+            )
+        end
+
         point = PrototypePoint(1.5, 2)
         sample = PrototypeSample(point, :sample, [3.0, 4.0])
         test_schema_round_trip(point_schema, point)

@@ -50,17 +50,20 @@ end
             encoded = HDF5Vectors2.read_encoded(store, 1:length(values))
             @test [decode_value(schema, value) for value in encoded] == values
 
-            # Fields use stable numeric groups, while each child schema selects its own
-            # physical representation recursively. The fourth field is constant and needs
-            # no value dataset.
+            # Each child schema selects its physical representation recursively. Field
+            # names make the layout meaningful to readers outside Julia, while the stored
+            # field-name vector preserves declaration order independently of HDF5 links.
             child_names = Set(String(name) for name in keys(data_group))
-            @test child_names == Set(["1", "2", "3", "4"])
-            @test Set(String(name) for name in keys(data_group["1"])) == Set(["1", "2"])
-            @test size(data_group["1/1/values"]) == (length(values),)
-            @test size(data_group["1/2/values"]) == (length(values),)
-            @test size(data_group["2/values"]) == (length(values),)
-            @test size(data_group["3/values"]) == (2, length(values))
-            @test isempty(keys(data_group["4"]))
+            @test child_names == Set(["point", "label", "samples", "marker"])
+            @test read(vector_group["metadata/schema/field_names"]) ==
+                ["point", "label", "samples", "marker"]
+            point_names = Set(String(name) for name in keys(data_group["point"]))
+            @test point_names == Set(["x", "y"])
+            @test size(data_group["point/x/values"]) == (length(values),)
+            @test size(data_group["point/y/values"]) == (length(values),)
+            @test size(data_group["label/values"]) == (length(values),)
+            @test size(data_group["samples/values"]) == (2, length(values))
+            @test isempty(keys(data_group["marker"]))
 
             # Loading uses the recursively stored schema and validates the lengths of all
             # nonconstant columns before returning the record store.

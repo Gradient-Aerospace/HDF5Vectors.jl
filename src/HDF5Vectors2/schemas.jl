@@ -52,6 +52,19 @@ function RecordSchema(
     children::Tuple,
 ) where {T, N}
 
+    if length(unique(names)) != N
+        throw(ArgumentError("A record schema for $T must use unique field names."))
+    end
+
+    for name in names
+        if isempty(name) || name == "." || occursin('/', name) || occursin('\0', name)
+            throw(ArgumentError(
+                "The record field name $(repr(name)) for $T cannot be used as one " *
+                "HDF5 path component.",
+            ))
+        end
+    end
+
     if length(children) != N
         throw(ArgumentError(
             "A record schema for $T needs one child for each of its $N fields.",
