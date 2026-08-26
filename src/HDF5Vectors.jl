@@ -818,8 +818,9 @@ function copy_to_hdf5_vector(
     n = length(collection)
     type = HDF5VectorOfArrayishTypes{arrayish_el_type, Tuple{el_dims...,}, datatype}
     big_array = Array{datatype}(undef, (el_dims..., n))
-    for k in eachindex(collection)
-        big_array[(Colon() for _ in el_dims)..., k] .= deconstruct(type, collection[k])
+    for (k, el) in enumerate(collection)
+        validate_arrayish_element(el_dims, el)
+        big_array[(Colon() for _ in el_dims)..., k] .= deconstruct(type, el)
     end
 
     # Set up the group and dataset with the current size and the ability to grow.
@@ -856,7 +857,39 @@ Base.length(arr::HDF5VectorOfArrayishTypes) = arr.count
 
 supports_setindex(::HDF5VectorOfArrayishTypes) = true
 
-validate_arrayish_element(::HDF5VectorOfArrayishTypes{T}, ::T) where {T} = nothing
+# ArrayStorageStyle places every vector element in a fixed-size frame of one HDF5 dataset.
+# Tuple and StaticArray dimensions are fixed by their types, but separate Array values with
+# the same type can have different dimensions. Those dynamic arrays therefore need an exact
+# size check before HDF5Vectors copies their values into a frame. In particular, this check
+# prevents Julia's broadcasting rules from silently expanding a smaller array during a bulk
+# copy.
+
+# Bulk copies use the expected-dimensions form while preparing values, before an HDF5 vector
+# or destination group exists. Other array-like types need no runtime validation because
+# their dimensions cannot vary without changing their types.
+validate_arrayish_element(::Tuple, el) = el
+
+function validate_arrayish_element(expected_dims::Tuple, el::Array)
+
+    actual_dims = size(el)
+    if actual_dims != expected_dims
+        throw(DimensionMismatch(
+            "Expected an element with dimensions $expected_dims, but got $actual_dims.",
+        ))
+    end
+    return el
+
+end
+
+# push! and setindex! already have an HDF5 vector. Its `D` parameter records the dimensions
+# of one frame, so this form retrieves those dimensions and shares the check used by bulk
+# copies.
+function validate_arrayish_element(
+    arr::HDF5VectorOfArrayishTypes{T, D},
+    el::T,
+) where {T, D}
+    return validate_arrayish_element(fieldtypes(D), el)
+end
 
 @inline function construct_arrayish_elements(
     type::Type{HDF5VectorOfArrayishTypes{T, D, DT}},
@@ -880,22 +913,6 @@ end
     end
     elemental_vector_type = HDF5VectorOfElementalTypes{element_type, DT}
     return map(el -> deconstruct(elemental_vector_type, el), elements)
-end
-
-function validate_arrayish_element(
-    arr::HDF5VectorOfArrayishTypes{T, D},
-    el::T,
-) where {T <: Array, D}
-
-    expected_dims = fieldtypes(D)
-    actual_dims = size(el)
-    if actual_dims != expected_dims
-        throw(DimensionMismatch(
-            "Expected an element with dimensions $expected_dims, but got $actual_dims.",
-        ))
-    end
-    return el
-
 end
 
 function Base.setindex!(arr::HDF5VectorOfArrayishTypes{T, D}, el::T, k::Int) where {T, D}

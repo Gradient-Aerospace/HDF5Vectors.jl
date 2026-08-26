@@ -503,6 +503,17 @@ end
         )
         @test !haskey(fid, "invalid_array")
 
+        # A shape mismatch that Julia could broadcast must still be rejected rather than
+        # silently expanded to the declared dimensions.
+        broadcastable_array_source = [reshape([1.0, 2.0], 2, 1)]
+        @test_throws DimensionMismatch copy_to_hdf5_vector(
+            fid["/"],
+            "broadcastable_invalid_array",
+            broadcastable_array_source;
+            dims = (2, 2),
+        )
+        @test !haskey(fid, "broadcastable_invalid_array")
+
     end
 
 end
