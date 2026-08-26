@@ -5,7 +5,9 @@ using EnumX
 using StaticArrays
 import JSON3
 
-# This tests what we need from an AbstractArray.
+# Exercise the public vector operations that every nonempty HDF5 storage representation is
+# expected to provide. The testsets below supply collections from each documented type
+# category, so adding an operation here checks it across all applicable backends.
 function test_collection(
     fid, name, source::Vector{T};
     chunk_length = 5, # Using a small number to make sure we need multiple chunks
@@ -22,6 +24,7 @@ function test_collection(
     # Test the many little array functions.
     @test length(arr) == length(source)
     @test size(arr) == (length(source),)
+    @test IndexStyle(typeof(arr)) == IndexLinear()
     @test arr[1] == source[1] # Check indexing.
     @test arr[end] == source[end] # Check end (lastindex).
     @test arr[:] == source
@@ -36,6 +39,19 @@ function test_collection(
     @test arr[falses(length(source))] == source[falses(length(source))]
     @test_throws BoundsError arr[vcat(mask, false)]
 
+    # Exercise operations directly on the HDF5 vector. These methods are part of the
+    # documented AbstractVector interface and must not rely on callers remembering to use
+    # iterable first.
+    @test [el for el in arr] == source
+    @test map(identity, arr) == source
+    @test identity.(arr) == source
+    @test mapreduce(identity, (a, b) -> b, arr) == source[end]
+    if T <: Real
+        @test sum(arr) == sum(source)
+    end
+
+    # iterable performs one bulk read before iteration. It should produce the same values
+    # and support the same ordinary Julia operations as the HDF5 vector itself.
     @test collect(arr) == source
     @test eltype(arr) == T
     @test map(identity, iterable(arr)) == source
@@ -44,8 +60,15 @@ function test_collection(
         @test sum(iterable(arr)) == sum(source) # Check mapreduce.
     end
 
-    # We notably don't test pure iteration here; we expect that to be painfully slow, and
-    # we also know it will work because indexing works.
+    # In-place replacement is optional because some storage styles are append-only. Every
+    # style that advertises replacement support should be able to replace and then restore
+    # a value through the normal AbstractVector interface.
+    if HDF5Vectors.supports_setindex(arr)
+        arr[1] = source[end]
+        @test arr[1] == source[end]
+        arr[1] = source[1]
+        @test collect(arr) == source
+    end
 
     # If the way the array is stored in HDF5 should match the Julia type directly, load
     # in the raw HDF5 array and compare to that.
@@ -162,6 +185,19 @@ struct MyNoncreteType
     x::NamedTuple
 end
 
+# A directly nonconcrete element type selects byte-array storage because its complete field
+# layout is unknown. Two concrete subtypes make sure one HDF5 vector can round-trip different
+# runtime types without narrowing its declared element type.
+abstract type MyAbstractSerializableType end
+
+struct MySerializableInteger <: MyAbstractSerializableType
+    value::Int64
+end
+
+struct MySerializableString <: MyAbstractSerializableType
+    value::String
+end
+
 struct MySingletonType
 end
 
@@ -176,9 +212,38 @@ out_dir = "out"
 mkpath("out")
 
 @testset "elemental types (portable = $portable)" for portable in (true, false)
+
     h5open("$out_dir/elemental_types.h5", "w") do fid
-        test_collection(fid, "ints", collect(1 : 10); native = true)
-        test_collection(fid, "floats", collect(1. : 12.); native = true)
+
+        # The documentation promises every HDF5-native signed and unsigned integer width.
+        # Boundary values make sure no implementation accidentally narrows a declared type.
+        integer_types = (
+            Int8,
+            UInt8,
+            Int16,
+            UInt16,
+            Int32,
+            UInt32,
+            Int64,
+            UInt64,
+        )
+        for integer_type in integer_types
+            source = integer_type[
+                typemin(integer_type),
+                zero(integer_type),
+                typemax(integer_type),
+            ]
+            name = lowercase(string(integer_type)) * "s"
+            test_collection(fid, name, source; native = true)
+        end
+
+        # Float32 and Float64 likewise have distinct native HDF5 representations.
+        for float_type in (Float32, Float64)
+            source = float_type[-1.5, 0, 2.25]
+            name = lowercase(string(float_type)) * "s"
+            test_collection(fid, name, source; native = true)
+        end
+
         test_collection(fid, "enums", [sparrowhawk, hawk, sparrow])
         uint8_enums = [uint8_max, uint8_zero, uint8_max]
         int64_enums = [int64_low, int64_high, int64_low]
@@ -198,7 +263,9 @@ mkpath("out")
         test_collection(fid, "strings", collect("element $k" for k in 1:9); native = true)
         test_collection(fid, "symbols", [:a for _ in 1:9])
         test_collection(fid, "bools", [isodd(k) for k in 1:9])
+
     end
+
 end
 
 @testset "array types (portable = $portable)" for portable in (true, false)
@@ -213,6 +280,17 @@ end
         test_collection(fid, "vectors_of_floats_no_dims", [Float64[k, 2k, 3k] for k in 1:12])
         test_collection(fid, "matrices_of_floats", [Float64[k 2k; 3k 4k] for k in 1:12]; create_kwargs = (; dims = (2,2), ))
         test_collection(fid, "matrices_of_floats_no_dims", [Float64[k 2k; 3k 4k] for k in 1:12])
+
+        # Vector and Matrix exercise one and two dimensions, while this case confirms that
+        # dynamically sized Array elements also preserve higher-dimensional shapes.
+        arrays_of_floats = [fill(Float64(k), 2, 1, 2) for k in 1:6]
+        test_collection(
+            fid,
+            "arrays_of_floats",
+            arrays_of_floats;
+            create_kwargs = (; dims = (2, 1, 2), ),
+        )
+
         test_collection(fid, "ntuples_of_symbols", [(:a, :b) for k in 1:3])
         test_collection(fid, "svectors_of_symbols", [SVector{2, Symbol}(:a, :b) for k in 1:2])
 
@@ -634,11 +712,60 @@ end
 
 end
 
+@testset "empty bulk copies" begin
+
+    h5open("$out_dir/empty_bulk_copies.h5", "w") do fid
+
+        # An empty source still carries an element type, which is enough to select and create
+        # each storage representation. Loading must recover an empty vector without relying
+        # on a first value from which to infer any part of the layout.
+        cases = (
+            ("elemental", Int64[], (;)),
+            ("array", Vector{Float64}[], (; dims = (2,), )),
+            ("composite", MyType[], (;)),
+            ("singleton", Nothing[], (;)),
+            ("serialized", MySerializingType[], (;)),
+            ("json", MyJSONishType[], (;)),
+        )
+        for (name, source, create_kwargs) in cases
+            copied = copy_to_hdf5_vector(fid["/"], name, source; create_kwargs...)
+            reloaded = load_hdf5_vector(fid[name])
+            @test isempty(copied)
+            @test isempty(reloaded)
+            @test eltype(copied) == eltype(source)
+            @test eltype(reloaded) == eltype(source)
+        end
+
+        # Empty byte-array storage is represented by two empty child datasets. Appending
+        # after reloading confirms that zero-byte initial storage remains extensible.
+        serialized_data_group = fid["serialized/data"]
+        @test isempty(read(serialized_data_group["bytes/data"]))
+        @test isempty(read(serialized_data_group["stops/data"]))
+        reloaded_serialized = load_hdf5_vector(fid["serialized"])
+        first_value = MySerializingType("first", [1.0], MyType(2, 3.0))
+        push!(reloaded_serialized, first_value)
+        @test collect(reloaded_serialized) == [first_value]
+
+    end
+
+end
+
 @testset "serialization types" begin
 
     h5open("$out_dir/serialization_types.h5", "w") do fid
 
+        # This first type is concrete, but one of its fields is nonconcrete. It exercises
+        # recursive fallback to byte-array storage for that field.
         test_collection(fid, "nonconcrete_types", [MyNoncreteType((; k, )) for k in 1:10])
+
+        # Here the vector's declared element type is itself abstract. The byte-array backend
+        # must preserve the concrete runtime type of each independently serialized value.
+        abstract_serializing_types = MyAbstractSerializableType[
+            MySerializableInteger(1),
+            MySerializableString("two"),
+            MySerializableInteger(3),
+        ]
+        test_collection(fid, "abstract_serializing_types", abstract_serializing_types)
 
         # These custom concrete types select their serialization formats through
         # storage_style, so the same format is selected when copied vectors are reloaded.
@@ -659,23 +786,6 @@ end
         serialized_data_group = fid["serializing_types-copy"]["data"]
         @test read(serialized_data_group["bytes"]["data"]) == expected_bytes
         @test read(serialized_data_group["stops"]["data"]) == expected_stops
-
-        # Empty collections must also produce valid, reloadable byte-array storage.
-        empty_copy = copy_to_hdf5_vector(
-            fid["/"],
-            "empty_serializing_types",
-            MySerializingType[],
-        )
-        @test isempty(empty_copy)
-        empty_data_group = fid["empty_serializing_types"]["data"]
-        @test isempty(read(empty_data_group["bytes"]["data"]))
-        @test isempty(read(empty_data_group["stops"]["data"]))
-
-        reloaded_empty_copy = load_hdf5_vector(fid["empty_serializing_types"])
-        @test isempty(reloaded_empty_copy)
-        first_value = MySerializingType("first", [1.0], MyType(2, 3.0))
-        push!(reloaded_empty_copy, first_value)
-        @test collect(reloaded_empty_copy) == [first_value]
 
     end
 
