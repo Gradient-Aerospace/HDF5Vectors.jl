@@ -197,14 +197,8 @@ function Base.getindex(vector::HDF5Vector, index::Int)
 end
 
 function decode_range(vector::HDF5Vector{T}, indices::UnitRange{Int}) where {T}
-
-    encoded = read_encoded(vector.store, indices)
-    values = Vector{T}(undef, length(indices))
-    for index in eachindex(values)
-        values[index] = decode_value(vector.schema, encoded[index])
-    end
-    return values
-
+    encoded = read_encoded_batch(vector.store, indices)
+    return decode_batch(vector.schema, encoded)
 end
 
 function Base.getindex(vector::HDF5Vector, indices::UnitRange{Int})
@@ -277,10 +271,7 @@ function copy_to_hdf5_vector(
         serialize_nonconcrete,
     )
     schema = infer_schema(T; dims, policy)
-    encoded = Vector{encoded_value_type(schema)}(undef, length(collection))
-    for (index, value) in enumerate(collection)
-        encoded[index] = encode_value(schema, value)
-    end
+    encoded = encode_batch(schema, collection)
 
     vector = create_hdf5_vector(group, name, schema; chunk_length)
     write_encoded_batch!(vector.store, 1, encoded)

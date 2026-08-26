@@ -63,6 +63,13 @@ end
         test_schema_round_trip(symbol_schema, :ready)
         test_schema_round_trip(enum_schema, prototype_max)
 
+        # An identity scalar batch already has exactly the representation HDF5 needs. The
+        # batch conversion deliberately returns the same object rather than copying it into
+        # a second vector before a bulk write or after a bulk read.
+        float_values = Float64[1.0, 2.0, 3.0]
+        @test HDF5Vectors2.encode_batch(float_schema, float_values) === float_values
+        @test HDF5Vectors2.decode_batch(float_schema, float_values) === float_values
+
     end
 
     @testset "dense schemas" begin
@@ -86,6 +93,22 @@ end
             StaticArrays.SVector(prototype_zero, prototype_max),
         )
         test_schema_round_trip(array_schema, ['a', 'b'])
+
+        # Dense batch encoding constructs the stacked physical layout directly. This tests
+        # both an identity element codec and a transforming codec, including reconstruction
+        # from views into the stacked array rather than independent frame Arrays.
+        static_values = [
+            StaticArrays.SVector(prototype_zero, prototype_max),
+            StaticArrays.SVector(prototype_max, prototype_zero),
+        ]
+        static_batch = HDF5Vectors2.encode_batch(static_schema, static_values)
+        char_values = [('a', 'b'), ('c', 'd')]
+        char_batch = HDF5Vectors2.encode_batch(tuple_schema, char_values)
+
+        @test static_batch == UInt8[0 255; 255 0]
+        @test char_batch == Int32['a' 'c'; 'b' 'd']
+        @test HDF5Vectors2.decode_batch(static_schema, static_batch) == static_values
+        @test HDF5Vectors2.decode_batch(tuple_schema, char_batch) == char_values
 
         @test_throws DimensionMismatch encode_value(array_schema, ['a'])
         @test_throws DimensionMismatch infer_schema(Vector{Char}; dims = (2, 1))

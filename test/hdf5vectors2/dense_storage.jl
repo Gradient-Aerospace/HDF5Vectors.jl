@@ -107,6 +107,26 @@ end
             frames = [encode_value(schema, value) for value in [['a', 'b'], ['c', 'd']]]
             HDF5Vectors2.write_encoded_batch!(store, 1, frames)
 
+            # The optimized public path passes one already-stacked batch to physical
+            # storage. It must use the same layout and checks as the frame-vector fallback.
+            direct_schema = infer_schema(StaticArrays.SVector{2, Float64})
+            direct_values = [
+                StaticArrays.SVector(1.0, 2.0),
+                StaticArrays.SVector(3.0, 4.0),
+            ]
+            direct_group = HDF5.create_group(file, "direct_batch")
+            direct_store = HDF5Vectors2.create_store(
+                direct_group,
+                direct_schema;
+                chunk_length = 2,
+            )
+            direct_batch = HDF5Vectors2.encode_batch(direct_schema, direct_values)
+            HDF5Vectors2.write_encoded_batch!(direct_store, 1, direct_batch)
+            stored_batch = HDF5Vectors2.read_encoded_batch(direct_store, 1:2)
+
+            @test stored_batch == direct_batch
+            @test HDF5Vectors2.decode_batch(direct_schema, stored_batch) == direct_values
+
             # An existing physical tail can be replaced, while a write cannot skip over
             # the next available position.
             replacement = encode_value(schema, ['e', 'f'])
@@ -124,6 +144,12 @@ end
             HDF5Vectors2.write_encoded_batch!(store, 2, empty_frames)
             @test HDF5Vectors2.read_encoded(store, 2:1) == empty_frames
             @test HDF5Vectors2.physical_length(store) == 1
+
+            empty_batch = HDF5Vectors2.encode_batch(direct_schema, direct_values[1:0])
+            @test size(empty_batch) == (2, 0)
+            HDF5Vectors2.write_encoded_batch!(direct_store, 3, empty_batch)
+            @test size(HDF5Vectors2.read_encoded_batch(direct_store, 3:2)) == (2, 0)
+            @test HDF5Vectors2.physical_length(direct_store) == 2
 
             # Dynamic Arrays can have the correct element type and rank but the wrong
             # dimensions. Single and batch writes reject them before extending storage.

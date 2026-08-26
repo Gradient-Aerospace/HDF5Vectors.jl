@@ -297,6 +297,12 @@ function validate_write_start(store::Union{ScalarStore, DenseStore}, start::Int)
     return current_length
 end
 
+# Most stores already return a vector of encoded logical values for a range. Dense storage
+# specializes this operation because its natural batch is one higher-dimensional array.
+function read_encoded_batch(store::AbstractStore, indices::UnitRange{Int})
+    return read_encoded(store, indices)
+end
+
 ###########################
 # Scalar Store Operations #
 ###########################
@@ -427,7 +433,34 @@ function write_encoded_batch!(
 
     # Stacking validates the complete batch before the dataset extent changes.
     stacked = stack_dense_frames(store, frames)
-    final_index = start + length(frames) - 1
+    return write_encoded_batch!(store, start, stacked)
+
+end
+
+function write_encoded_batch!(
+    store::DenseStore{H, N},
+    start::Int,
+    stacked::Array{H, M},
+) where {H, N, M}
+
+    # A directly encoded dense batch already has the physical HDF5 layout. Its leading
+    # dimensions are still checked before changing the dataset because the final dimension
+    # alone determines how many logical values it contains.
+    frame_count = size(stacked, N + 1)
+    expected_extent = dense_extent(store, frame_count)
+    if size(stacked) != expected_extent
+        throw(DimensionMismatch(
+            "Expected an encoded batch with dimensions $expected_extent, but got " *
+            "$(size(stacked)).",
+        ))
+    end
+
+    current_length = validate_write_start(store, start)
+    if iszero(frame_count)
+        return store
+    end
+
+    final_index = start + frame_count - 1
     if final_index > current_length
         HDF5.set_extent_dims(store.dataset, dense_extent(store, final_index))
     end
@@ -435,6 +468,24 @@ function write_encoded_batch!(
     selection = (dense_colons(store)..., start:final_index)
     store.dataset[selection...] = stacked
     return store
+
+end
+
+function read_encoded_batch(
+    store::DenseStore{H, N},
+    indices::UnitRange{Int},
+) where {H, N}
+
+    if isempty(indices)
+        return Array{H, N + 1}(undef, dense_extent(store, 0))
+    elseif first(indices) < 1 || last(indices) > physical_length(store)
+        throw(BoundsError(store, indices))
+    end
+
+    # The dataset already stores a dense batch in the representation consumed by the
+    # schema layer. Preserving it avoids allocating an independent Array for every frame.
+    selection = (dense_colons(store)..., indices)
+    return read(store.dataset, H, selection...)
 
 end
 
