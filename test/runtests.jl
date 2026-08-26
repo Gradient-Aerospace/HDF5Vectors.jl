@@ -829,3 +829,5 @@ end
     end
 
 end
+
+include("hdf5vectors2/runtests.jl")
