@@ -28,7 +28,9 @@ using .HDF5Vectors2:
     decode_value,
     write_schema,
     read_schema
+import EnumX
 import HDF5
+import HDF5Vectors
 import StaticArrays
 
 include("schema_and_codecs.jl")
@@ -38,3 +40,4 @@ include("dense_storage.jl")
 include("record_storage.jl")
 include("blob_storage.jl")
 include("public_vector.jl")
+include("implementation_comparison.jl")
