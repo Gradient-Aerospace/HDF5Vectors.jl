@@ -751,6 +751,86 @@ function validate_encoded(store::RecordStore, value::Tuple)
     return nothing
 end
 
+# Record batches arrive with one recursively encoded column per child store. This complete
+# preflight happens before the first child changes, retaining the protection previously
+# provided by validating every encoded row.
+function validate_encoded_column_count(values, expected_count)
+    if length(values) != expected_count
+        throw(DimensionMismatch(
+            "An encoded column has $(length(values)) values instead of $expected_count.",
+        ))
+    end
+    return nothing
+end
+
+function validate_encoded_batch(
+    ::ScalarStore{H},
+    values::AbstractVector{H},
+    expected_count::Int,
+) where {H}
+    return validate_encoded_column_count(values, expected_count)
+end
+
+function validate_encoded_batch(
+    store::DenseStore{H, N},
+    stacked::Array{H, M},
+    expected_count::Int,
+) where {H, N, M}
+    expected_extent = dense_extent(store, expected_count)
+    if size(stacked) != expected_extent
+        throw(DimensionMismatch(
+            "An encoded dense column has dimensions $(size(stacked)) instead of " *
+            "$expected_extent.",
+        ))
+    end
+    return nothing
+end
+
+function validate_encoded_batch(
+    ::BlobStore,
+    values::AbstractVector{<:Vector{UInt8}},
+    expected_count::Int,
+)
+    return validate_encoded_column_count(values, expected_count)
+end
+
+function validate_encoded_batch(
+    ::ConstantStore,
+    values::AbstractVector{Nothing},
+    expected_count::Int,
+)
+    return validate_encoded_column_count(values, expected_count)
+end
+
+function validate_encoded_batch(
+    store::RecordStore,
+    batch::RecordBatch,
+    expected_count::Int = batch.count,
+)
+
+    if batch.count != expected_count
+        throw(DimensionMismatch(
+            "An encoded record column has $(batch.count) values instead of " *
+            "$expected_count.",
+        ))
+    elseif length(batch.columns) != length(store.children)
+        throw(ArgumentError(
+            "Encoded record data has $(length(batch.columns)) fields instead of " *
+            "$(length(store.children)).",
+        ))
+    end
+
+    for index in eachindex(store.children)
+        validate_encoded_batch(
+            store.children[index],
+            batch.columns[index],
+            batch.count,
+        )
+    end
+    return nothing
+
+end
+
 function validate_write_start(store::RecordStore, start::Int)
     current_length = physical_length(store)
     if isnothing(current_length)
@@ -815,6 +895,30 @@ function write_encoded_batch!(
 
 end
 
+function write_encoded_batch!(
+    store::RecordStore,
+    start::Int,
+    batch::RecordBatch,
+)
+
+    # Column validation reaches every nested field before physical mutation. Each child
+    # can therefore receive its natural batch representation directly, with no row-to-
+    # column rearrangement inside the storage layer.
+    validate_encoded_batch(store, batch)
+    validate_write_start(store, start)
+
+    for index in eachindex(store.children)
+        write_encoded_batch!(
+            store.children[index],
+            start,
+            batch.columns[index],
+        )
+    end
+
+    return store
+
+end
+
 function read_encoded(store::RecordStore, index::Int)
 
     record_length = physical_length(store)
@@ -846,6 +950,24 @@ function read_encoded(store::RecordStore, indices::UnitRange{Int})
         values[value_index] = map(column -> column[value_index], child_columns)
     end
     return values
+
+end
+
+function read_encoded_batch(store::RecordStore, indices::UnitRange{Int})
+
+    record_length = physical_length(store)
+    if isnothing(record_length)
+        if !isempty(indices) && first(indices) < 1
+            throw(BoundsError(1:typemax(Int), indices))
+        end
+    elseif !isempty(indices) && (first(indices) < 1 || last(indices) > record_length)
+        throw(BoundsError(store, indices))
+    end
+
+    # Child stores retain their natural batch shapes. The schema layer consumes these
+    # columns recursively and constructs only the final logical record vector.
+    columns = map(child -> read_encoded_batch(child, indices), store.children)
+    return RecordBatch(columns, length(indices))
 
 end
 

@@ -50,6 +50,26 @@ end
             encoded = HDF5Vectors2.read_encoded(store, 1:length(values))
             @test [decode_value(schema, value) for value in encoded] == values
 
+            # The optimized path preserves columns throughout bulk encoding, storage, and
+            # decoding. The nested point is itself a record batch, and the tuple field is
+            # already stacked in its final dense HDF5 layout.
+            batch = HDF5Vectors2.encode_batch(schema, values)
+            batch_group = HDF5.create_group(file, "record_batch")
+            batch_store = HDF5Vectors2.create_store(
+                batch_group,
+                schema;
+                chunk_length = 2,
+            )
+            HDF5Vectors2.write_encoded_batch!(batch_store, 1, batch)
+            stored_batch = HDF5Vectors2.read_encoded_batch(
+                batch_store,
+                1:length(values),
+            )
+
+            @test batch.columns[1] isa HDF5Vectors2.RecordBatch
+            @test size(batch.columns[3]) == (2, length(values))
+            @test HDF5Vectors2.decode_batch(schema, stored_batch) == values
+
             # Each child schema selects its physical representation recursively. Field
             # names make the layout meaningful to readers outside Julia, while the stored
             # field-name vector preserves declaration order independently of HDF5 links.
@@ -190,6 +210,23 @@ end
             @test HDF5Vectors2.physical_length(store) == 0
             @test size(data_group["1/values"]) == (2, 0)
             @test isempty(data_group["2/values"])
+
+            # A malformed column batch is also rejected in full before the first field is
+            # written. Here the dense field contains two records, but the scalar field
+            # contains only one despite the batch's declared count of two.
+            invalid_batch = HDF5Vectors2.RecordBatch(
+                (
+                    Int32[Int('a') Int('c'); Int('b') Int('d')],
+                    Int64[1],
+                ),
+                2,
+            )
+            @test_throws DimensionMismatch HDF5Vectors2.write_encoded_batch!(
+                store,
+                1,
+                invalid_batch,
+            )
+            @test HDF5Vectors2.physical_length(store) == 0
 
             HDF5Vectors2.write_encoded_batch!(store, 1, [valid_value, valid_value])
             HDF5Vectors2.truncate_store!(store, 1)

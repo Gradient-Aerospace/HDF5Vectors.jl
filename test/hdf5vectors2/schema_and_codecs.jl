@@ -154,6 +154,22 @@ end
         test_schema_round_trip(point_schema, point)
         test_schema_round_trip(sample_schema, sample)
 
+        # A record batch follows the stored field layout rather than materializing encoded
+        # row tuples. Nested records become nested batches, while scalar fields and blob
+        # fields retain their own natural column representations.
+        samples = [
+            sample,
+            PrototypeSample(PrototypePoint(5.0, 6), :other, [7.0]),
+        ]
+        sample_batch = HDF5Vectors2.encode_batch(sample_schema, samples)
+
+        @test sample_batch isa HDF5Vectors2.RecordBatch
+        @test sample_batch.count == length(samples)
+        @test sample_batch.columns[1] isa HDF5Vectors2.RecordBatch
+        @test sample_batch.columns[2] == ["sample", "other"]
+        @test length(sample_batch.columns[3]) == length(samples)
+        @test HDF5Vectors2.decode_batch(sample_schema, sample_batch) == samples
+
         # A non-portable, nonzero-size bits record may use one native HDF5 datatype. This is
         # an inference policy; later storage operations simply execute the selected schema.
         native_point_schema = infer_schema(

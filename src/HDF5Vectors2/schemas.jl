@@ -86,6 +86,14 @@ struct ConstantSchema{T, C <: AbstractCodec{T, Nothing}} <: AbstractSchema{T}
     codec::C
 end
 
+# A single encoded record is a row-like tuple, but a record batch follows the field-oriented
+# HDF5 layout. `count` remains explicit because a record whose fields are all constants has
+# no physical child column from which its logical length could be recovered.
+struct RecordBatch{Columns <: Tuple}
+    columns::Columns
+    count::Int
+end
+
 ################################
 # Encoded Representation Types #
 ################################
@@ -192,13 +200,21 @@ function decode_value(
     end
 
 end
-function encode_value(schema::RecordSchema{T, N}, value::T) where {T, N}
+function decompose_record(schema::RecordSchema{T, N}, value::T) where {T, N}
+
     fields = decompose(schema.codec, value)
     if length(fields) != N
         throw(ArgumentError(
             "The record codec for $T produced $(length(fields)) fields instead of $N.",
         ))
     end
+
+    return fields
+
+end
+
+function encode_value(schema::RecordSchema{T, N}, value::T) where {T, N}
+    fields = decompose_record(schema, value)
     return ntuple(
         index -> encode_value(schema.children[index], fields[index]),
         N,
@@ -314,6 +330,89 @@ function decode_batch(
     values = Vector{T}(undef, size(stacked, N + 1))
     for index in eachindex(values)
         values[index] = decode_value(schema, selectdim(stacked, N + 1, index))
+    end
+    return values
+
+end
+
+# A type check before assignment prevents a typed logical column from silently converting
+# incorrect record-codec output before its child schema has an opportunity to reject it.
+function store_record_field!(
+    column::Vector{F},
+    field,
+    value_index,
+    field_index,
+    type,
+) where {F}
+    if !(field isa F)
+        throw(ArgumentError(
+            "The record codec for $type produced a field of type $(typeof(field)) at " *
+            "position $field_index instead of $F.",
+        ))
+    end
+    column[value_index] = field
+    return nothing
+end
+
+function encode_batch(
+    schema::RecordSchema{T, N},
+    values::AbstractVector{T},
+) where {T, N}
+
+    # Logical field columns let each child schema construct its natural encoded batch. A
+    # value is decomposed exactly once, preserving the scalar interface's behavior for
+    # codecs with computed fields while avoiding an encoded row vector and a later
+    # transposition.
+    columns = map(
+        child -> Vector{logical_type(child)}(undef, length(values)),
+        schema.children,
+    )
+    for (value_index, value) in enumerate(values)
+        fields = decompose_record(schema, value)
+        for field_index in eachindex(columns)
+            store_record_field!(
+                columns[field_index],
+                fields[field_index],
+                value_index,
+                field_index,
+                T,
+            )
+        end
+    end
+
+    encoded_columns = map(encode_batch, schema.children, columns)
+    return RecordBatch(encoded_columns, length(values))
+
+end
+
+function decode_batch(
+    schema::RecordSchema{T, N},
+    encoded::RecordBatch,
+) where {T, N}
+
+    if length(encoded.columns) != N
+        throw(ArgumentError(
+            "Encoded record data for $T has $(length(encoded.columns)) fields instead " *
+            "of $N.",
+        ))
+    end
+
+    # Each child batch is decoded once as a column. Final values are then constructed
+    # directly from those columns, without first allocating encoded row tuples.
+    columns = map(decode_batch, schema.children, encoded.columns)
+    for (index, column) in enumerate(columns)
+        if length(column) != encoded.count
+            throw(DimensionMismatch(
+                "Decoded record field $index has $(length(column)) values instead of " *
+                "$(encoded.count).",
+            ))
+        end
+    end
+
+    values = Vector{T}(undef, encoded.count)
+    for value_index in eachindex(values)
+        fields = map(column -> column[value_index], columns)
+        values[value_index] = compose(schema.codec, fields)
     end
     return values
 
