@@ -77,6 +77,58 @@ function test_public_hdf5_vector(
 
 end
 
+@testset "HDF5Vectors public calls use HDF5Vectors2" begin
+
+    mktempdir() do directory
+
+        HDF5.h5open(joinpath(directory, "public_routing.h5"), "w") do file
+
+            # Downstream packages call the parent module, so these checks exercise that
+            # route rather than invoking the prototype submodule directly. The returned
+            # vector retains the established abstract supertype and its shared conveniences.
+            vector = HDF5Vectors.create_hdf5_vector(file["/"], "pushed", Int64)
+            @test vector isa HDF5Vectors.HDF5Vector{Int64}
+            @test vector isa HDF5Vectors.AbstractHDF5Vector{Int64}
+            @test HDF5Vectors.HDF5Vector === HDF5Vectors2.HDF5Vector
+            push!(vector, 1)
+            push!(vector, 2)
+            @test collect(HDF5Vectors.iterable(vector)) == Int64[1, 2]
+
+            # Copying and both loading forms should return the replacement type and use
+            # its versioned schema metadata.
+            source = [PrototypePoint(1.0, 2), PrototypePoint(3.0, 4)]
+            copied = HDF5Vectors.copy_to_hdf5_vector(
+                file["/"],
+                "copied",
+                source,
+            )
+            @test copied isa HDF5Vectors.HDF5Vector{PrototypePoint}
+            @test read(file["copied/metadata/format_name"]) == "HDF5Vectors2"
+            @test collect(HDF5Vectors.load_hdf5_vector(file["copied"])) == source
+            @test collect(
+                HDF5Vectors.load_hdf5_vector(file["copied"], PrototypePoint),
+            ) == source
+
+            # An explicit schema is part of the replacement's extension interface and is
+            # also accepted through the parent module during downstream evaluation.
+            schema = infer_schema(PrototypeGrade)
+            explicit = HDF5Vectors.create_hdf5_vector(
+                file["/"],
+                "explicit",
+                schema,
+            )
+            push!(explicit, PrototypeGrade("A"))
+            @test collect(HDF5Vectors.load_hdf5_vector(
+                file["explicit"],
+                schema,
+            )) == [PrototypeGrade("A")]
+
+        end
+
+    end
+
+end
+
 @testset "HDF5Vectors2 public vector operations" begin
 
     mktempdir() do directory

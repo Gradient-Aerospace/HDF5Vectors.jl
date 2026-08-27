@@ -18,6 +18,7 @@ load_hdf5_vector
 
 ```@docs
 AbstractHDF5Vector
+HDF5Vector
 iterable
 ```
 

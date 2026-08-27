@@ -26,7 +26,8 @@ memory and is generally faster when the vector fits in RAM.
 """
 module HDF5Vectors
 
-export AbstractHDF5Vector, create_hdf5_vector, load_hdf5_vector, copy_to_hdf5_vector, iterable
+export AbstractHDF5Vector, HDF5Vector
+export create_hdf5_vector, load_hdf5_vector, copy_to_hdf5_vector, iterable
 
 using HDF5
 using StaticArrays: StaticArray, SVector
@@ -239,10 +240,9 @@ function deconstruct end
 ######################
 
 """
-An abstract type intended as the parent for all types of HDF5 vectors. Subtypes should have
-a corresponding storage style and implement [`create_hdf5_vector`](@ref), and at least these
-parts of the AbstractArray interface: `length`, `push!`, `getindex`, and `collect`.
-`setindex!` is optional for storage that supports in-place replacement.
+An abstract parent for HDF5-backed vector implementations. The built-in [`HDF5Vector`](@ref)
+implements append-only storage through an explicit schema. Application code can generally
+use the ordinary `AbstractVector` interface without depending on its concrete type.
 """
 abstract type AbstractHDF5Vector{T} <: AbstractVector{T} end
 
@@ -407,32 +407,9 @@ function store_metadata(
     return metadata_group
 end
 
-"""
-    create_hdf5_vector(
-        group::HDF5.Group,
-        name::AbstractString,
-        el_type;
-        dims = nothing,
-        chunk_length = 1000,
-        portable = true,
-    )
-
-Creates the appropriate HDF5 vector type for the given element type, storing the vector in
-the given HDF5 `group` under `name`.
-
-Optional keyword arguments:
-
-* `dims = nothing`: Dimensions of each dynamically sized array element. This must be a
-  tuple of positive integers whose length matches the array rank. It enables efficient
-  array-like storage for arrays of elemental values; dimensions of tuples and static
-  arrays are inferred from their types.
-* `chunk_length = 1000`: Positive integer chunk length for the underlying HDF5 datasets. It
-  affects storage layout and I/O performance but does not limit the vector length.
-* `portable = true`: When true, use field-oriented storage for composite bits types. When
-  false, permit a faster native HDF5 datatype where available. It is ignored for types with
-  only one supported representation and does not make Julia-serialized data portable.
-"""
-function create_hdf5_vector(
+# These entry points keep the baseline implementation available only for its regression
+# suite and the side-by-side benchmark. Ordinary package calls below route to HDF5Vectors2.
+function create_baseline_hdf5_vector(
     group::HDF5.Group, name::AbstractString, el_type;
     dims = nothing, chunk_length = 1000, portable = true,
 )
@@ -444,6 +421,46 @@ function create_hdf5_vector(
     )
 end
 
+"""
+    create_hdf5_vector(
+        group::HDF5.Group,
+        name::AbstractString,
+        el_type::Type;
+        dims = nothing,
+        chunk_length = 1000,
+        portable = true,
+        serialize_arrays = true,
+        serialize_nonconcrete = true,
+    )
+
+Creates an empty HDF5-backed vector under `name`. Schema inference selects and records the
+complete physical representation when the vector is created.
+
+Optional keyword arguments:
+
+* `dims = nothing`: Dimensions of each dynamically sized array element. This must be a
+  tuple of positive integers whose length matches the array rank. Dimensions of tuples and
+  static arrays are inferred from their types.
+* `chunk_length = 1000`: Positive integer chunk length for the underlying HDF5 datasets. It
+  affects storage layout and I/O performance but does not limit the vector length.
+* `portable = true`: When true, composite values use field-oriented storage that is easier
+  to interpret outside Julia. When false, bits-type composites may use one native HDF5
+  datatype.
+* `serialize_arrays = true`: When true, dynamically sized arrays without declared
+  dimensions use Julia serialization. When false, such arrays are rejected during schema
+  inference.
+* `serialize_nonconcrete = true`: When true, nonconcrete declared element types use Julia
+  serialization. When false, such types are rejected during schema inference.
+"""
+function create_hdf5_vector(
+    group::HDF5.Group,
+    name::AbstractString,
+    el_type::Type;
+    kwargs...,
+)
+    return HDF5Vectors2.create_hdf5_vector(group, name, el_type; kwargs...)
+end
+
 function read_storage_options(metadata_group::HDF5.Group)
     dimensions_are_constant = read(metadata_group["dimensions_are_constant"])
     dims = dimensions_are_constant ? (read(metadata_group["dimensions"])...,) : nothing
@@ -451,15 +468,7 @@ function read_storage_options(metadata_group::HDF5.Group)
     return (; dims, portable)
 end
 
-"""
-    load_hdf5_vector(group::HDF5.Group)
-
-Reconstructs an HDF5 vector from a group created by `create_hdf5_vector`. The metadata stored
-in the group (type, dimensions, portability) is used to determine which specific vector
-implementation to instantiate. This form takes only the `group` and pulls the element type
-from the metadata.
-"""
-function load_hdf5_vector(group::HDF5.Group)
+function load_baseline_hdf5_vector(group::HDF5.Group)
     metadata_group = group["metadata"]
     el_type = deserialize_from_byte_array(read(metadata_group["serialized_type"]))
     options = read_storage_options(metadata_group)
@@ -471,14 +480,7 @@ function load_hdf5_vector(group::HDF5.Group)
     )
 end
 
-"""
-    load_hdf5_vector(group::HDF5.Group, el_type)
-
-Reconstructs an HDF5 vector when the caller already knows the element type. When loading a
-group created by `create_hdf5_vector`, its stored dimensions and portability setting are
-used to select the storage representation.
-"""
-function load_hdf5_vector(group::HDF5.Group, el_type)
+function load_baseline_hdf5_vector(group::HDF5.Group, el_type)
     options = read_storage_options(group["metadata"])
     return load_hdf5_vector(
         storage_style(el_type; options...),
@@ -489,32 +491,23 @@ function load_hdf5_vector(group::HDF5.Group, el_type)
 end
 
 """
-    copy_to_hdf5_vector(
-        group::HDF5.Group,
-        name::AbstractString,
-        collection;
-        dims = nothing,
-        chunk_length = 1000,
-        portable = true,
-    )
+    load_hdf5_vector(group::HDF5.Group)
+    load_hdf5_vector(group::HDF5.Group, el_type::Type)
 
-Creates an HDF5 vector using `eltype(collection)` and copies the collection into it. The
-copy uses specialized bulk writes where the selected storage format supports them.
-
-Optional keyword arguments:
-
-* `dims = nothing`: Dimensions of each dynamically sized array element. This must be a
-  tuple of positive integers whose length matches the array rank. It enables efficient
-  array-like storage for arrays of elemental values; dimensions of tuples and static
-  arrays are inferred from their types. Dimensions are not inferred by inspecting the
-  collection.
-* `chunk_length = 1000`: Positive integer chunk length for the underlying HDF5 datasets. It
-  affects storage layout and I/O performance but does not limit the vector length.
-* `portable = true`: When true, use field-oriented storage for composite bits types. When
-  false, permit a faster native HDF5 datatype where available. It is ignored for types with
-  only one supported representation and does not make Julia-serialized data portable.
+Loads an HDF5-backed vector from its stored schema. The form without an explicit type
+deserializes the exact schema stored in the file. The explicit-type form repeats public
+schema inference for a vector originally created from a type, avoiding schema metadata
+deserialization in that common case.
 """
-function copy_to_hdf5_vector(
+function load_hdf5_vector(group::HDF5.Group)
+    return HDF5Vectors2.load_hdf5_vector(group)
+end
+
+function load_hdf5_vector(group::HDF5.Group, el_type::Type)
+    return HDF5Vectors2.load_hdf5_vector(group, el_type)
+end
+
+function copy_baseline_to_hdf5_vector(
     group::HDF5.Group, name::AbstractString, collection;
     dims = nothing, chunk_length = 1000, portable = true,
 )
@@ -524,6 +517,32 @@ function copy_to_hdf5_vector(
         group, name, collection;
         dims, chunk_length, portable,
     )
+end
+
+"""
+    copy_to_hdf5_vector(
+        group::HDF5.Group,
+        name::AbstractString,
+        collection::AbstractVector;
+        dims = nothing,
+        chunk_length = 1000,
+        portable = true,
+        serialize_arrays = true,
+        serialize_nonconcrete = true,
+    )
+
+Creates an HDF5-backed vector and copies an ordinary vector into it with one recursive bulk
+write.
+
+The keyword arguments have the same meanings as for [`create_hdf5_vector`](@ref).
+"""
+function copy_to_hdf5_vector(
+    group::HDF5.Group,
+    name::AbstractString,
+    collection::AbstractVector;
+    kwargs...,
+)
+    return HDF5Vectors2.copy_to_hdf5_vector(group, name, collection; kwargs...)
 end
 
 # The generic implementation creates the vector and fills it one element at a time. Storage
@@ -1003,8 +1022,8 @@ function create_hdf5_vector(
     store_metadata(style, this_group, el_type; portable)
     data_group = create_group(this_group, "data")
     return HDF5VectorWithByteArrayStorage{el_type}(
-        create_hdf5_vector(data_group, "bytes", UInt8; kwargs...),
-        create_hdf5_vector(data_group, "stops", Int64; kwargs...),
+        create_baseline_hdf5_vector(data_group, "bytes", UInt8; kwargs...),
+        create_baseline_hdf5_vector(data_group, "stops", Int64; kwargs...),
     )
 end
 
@@ -1036,8 +1055,8 @@ function copy_to_hdf5_vector(
     store_metadata(style, this_group, el_type; portable)
     data_group = create_group(this_group, "data")
     return HDF5VectorWithByteArrayStorage{el_type}(
-        copy_to_hdf5_vector(data_group, "bytes", bytes; chunk_length),
-        copy_to_hdf5_vector(data_group, "stops", stops; chunk_length),
+        copy_baseline_to_hdf5_vector(data_group, "bytes", bytes; chunk_length),
+        copy_baseline_to_hdf5_vector(data_group, "stops", stops; chunk_length),
     )
 
 end
@@ -1048,8 +1067,8 @@ function load_hdf5_vector(
     el_type;
     kwargs...,
 )
-    storage = load_hdf5_vector(group["data"]["bytes"], UInt8)
-    stops = load_hdf5_vector(group["data"]["stops"], Int64)
+    storage = load_baseline_hdf5_vector(group["data"]["bytes"], UInt8)
+    stops = load_baseline_hdf5_vector(group["data"]["stops"], Int64)
     byte_count = length(storage)
     if isempty(stops)
         if !iszero(byte_count)
@@ -1140,7 +1159,7 @@ function create_hdf5_vector(
     data_group = create_group(this_group, "data")
     return HDF5VectorOfCompositeTypes{T}(
         [
-            create_hdf5_vector(
+            create_baseline_hdf5_vector(
                 data_group,
                 string(fn),
                 ft;
@@ -1186,7 +1205,7 @@ function copy_to_hdf5_vector(
     # from the declared style selected again when the parent vector is loaded.
     return HDF5VectorOfCompositeTypes{el_type}(
         [
-            copy_to_hdf5_vector(
+            copy_baseline_to_hdf5_vector(
                 data_group,
                 string(field_name),
                 field_type[
@@ -1210,7 +1229,7 @@ function load_hdf5_vector(
     kwargs...,
 )
     arrays = [
-        load_hdf5_vector(group["data"][string(fn)], ft)
+        load_baseline_hdf5_vector(group["data"][string(fn)], ft)
         for (fn, ft) in zip(fieldnames(el_type), fieldtypes(el_type))
     ]
     count = isempty(arrays) ? 0 : length(first(arrays))
@@ -1493,5 +1512,34 @@ end
 # released interface. Loading it as a submodule lets ordinary Julia package extensions add
 # optional codec methods without putting an optional dependency in the prototype's core.
 include("HDF5Vectors2/HDF5Vectors2.jl")
+
+# The replacement implementation remains namespaced for its extension interface while the
+# package's ordinary construction and loading functions route to it. Exposing its concrete
+# vector type at the package level makes public return-type checks straightforward during
+# downstream evaluation.
+"""
+    HDF5Vector{T} <: AbstractHDF5Vector{T}
+
+An HDF5-backed vector with logical element type `T`. Vectors are normally constructed with
+[`create_hdf5_vector`](@ref), [`copy_to_hdf5_vector`](@ref), or
+[`load_hdf5_vector`](@ref).
+"""
+const HDF5Vector = HDF5Vectors2.HDF5Vector
+
+function create_hdf5_vector(
+    group::HDF5.Group,
+    name::AbstractString,
+    schema::HDF5Vectors2.AbstractSchema;
+    kwargs...,
+)
+    return HDF5Vectors2.create_hdf5_vector(group, name, schema; kwargs...)
+end
+
+function load_hdf5_vector(
+    group::HDF5.Group,
+    schema::HDF5Vectors2.AbstractSchema,
+)
+    return HDF5Vectors2.load_hdf5_vector(group, schema)
+end
 
 end # module HDF5Vectors

@@ -3,6 +3,7 @@ module HDF5Vectors2
 using Serialization
 import HDF5
 import StaticArrays
+import ..HDF5Vectors: AbstractHDF5Vector
 
 include("codecs.jl")
 include("schemas.jl")

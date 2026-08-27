@@ -41,7 +41,12 @@ function HDF5Vectors.create_hdf5_vector(
     HDF5Vectors.store_metadata(style, this_group, el_type; portable)
     data_group = HDF5.create_group(this_group, "data")
     return HDF5VectorWithJSONStorage{el_type}(
-        HDF5Vectors.create_hdf5_vector(data_group, "json", String; kwargs...),
+        HDF5Vectors.create_baseline_hdf5_vector(
+            data_group,
+            "json",
+            String;
+            kwargs...,
+        ),
     )
 end
 function HDF5Vectors.load_hdf5_vector(
@@ -51,7 +56,7 @@ function HDF5Vectors.load_hdf5_vector(
     kwargs...,
 )
     return HDF5VectorWithJSONStorage{el_type}(
-        HDF5Vectors.load_hdf5_vector(group["data"]["json"], String),
+        HDF5Vectors.load_baseline_hdf5_vector(group["data"]["json"], String),
     )
 end
 Base.length(arr::HDF5VectorWithJSONStorage) = length(arr.storage)

@@ -3,12 +3,11 @@
 #
 #     julia --project=. benchmark/hdf5vectors2_comparison.jl
 
-include(joinpath(@__DIR__, "..", "src", "HDF5Vectors2", "HDF5Vectors2.jl"))
-
-import .HDF5Vectors2
 import HDF5
 import HDF5Vectors
 import StaticArrays
+
+const HDF5Vectors2 = HDF5Vectors.HDF5Vectors2
 
 struct BenchmarkTimestamp
     weeks::Int32
@@ -50,7 +49,7 @@ end
 
 function copy_existing(path, source, options)
     return HDF5.h5open(path, "w") do file
-        vector = HDF5Vectors.copy_to_hdf5_vector(
+        vector = HDF5Vectors.copy_baseline_to_hdf5_vector(
             file["/"],
             "values",
             source;
@@ -76,7 +75,7 @@ end
 
 function push_existing(path, source, options)
     return HDF5.h5open(path, "w") do file
-        vector = HDF5Vectors.create_hdf5_vector(
+        vector = HDF5Vectors.create_baseline_hdf5_vector(
             file["/"],
             "values",
             eltype(source);
@@ -108,7 +107,7 @@ end
 
 function load_and_collect_existing(path)
     return HDF5.h5open(path, "r") do file
-        return collect(HDF5Vectors.load_hdf5_vector(file["values"]))
+        return collect(HDF5Vectors.load_baseline_hdf5_vector(file["values"]))
     end
 end
 
@@ -173,7 +172,9 @@ function benchmark_workload(
     existing_file = HDF5.h5open(existing_collect_path, "r")
     prototype_file = HDF5.h5open(prototype_collect_path, "r")
     existing_collect, prototype_collect = try
-        existing_vector = HDF5Vectors.load_hdf5_vector(existing_file["values"])
+        existing_vector = HDF5Vectors.load_baseline_hdf5_vector(
+            existing_file["values"],
+        )
         prototype_vector = HDF5Vectors2.load_hdf5_vector(prototype_file["values"])
         (
             measure(() -> collect(existing_vector); samples),

@@ -3,7 +3,7 @@
 #######################
 
 """
-    HDF5Vector{T} <: AbstractVector{T}
+    HDF5Vector{T} <: AbstractHDF5Vector{T}
 
 An HDF5-backed vector with logical element type `T`. Vectors are normally constructed with
 [`create_hdf5_vector`](@ref), [`copy_to_hdf5_vector`](@ref), or
@@ -13,7 +13,7 @@ mutable struct HDF5Vector{
     T,
     S <: AbstractSchema{T},
     Store <: AbstractStore,
-} <: AbstractVector{T}
+} <: AbstractHDF5Vector{T}
     schema::S
     store::Store
     count_dataset::HDF5.Dataset

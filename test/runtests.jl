@@ -1,9 +1,17 @@
 using Test
-using HDF5Vectors
+import HDF5Vectors
+using HDF5Vectors: iterable
 using HDF5
 using EnumX
 using StaticArrays
 import JSON3
+
+# This file preserves the baseline implementation's regression suite while the package's
+# ordinary public entry points exercise the replacement. Keeping explicit names here lets
+# the comparison tests continue to measure two genuinely different implementations.
+const create_hdf5_vector = HDF5Vectors.create_baseline_hdf5_vector
+const load_hdf5_vector = HDF5Vectors.load_baseline_hdf5_vector
+const copy_to_hdf5_vector = HDF5Vectors.copy_baseline_to_hdf5_vector
 
 # Exercise the public vector operations that every nonempty HDF5 storage representation is
 # expected to provide. The testsets below supply collections from each documented type

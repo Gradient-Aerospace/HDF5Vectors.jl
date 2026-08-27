@@ -60,7 +60,7 @@ function compare_hdf5_vector_implementations(
     kwargs...,
 ) where {T}
 
-    old_vector = HDF5Vectors.copy_to_hdf5_vector(
+    old_vector = HDF5Vectors.copy_baseline_to_hdf5_vector(
         old_group,
         name,
         source;
@@ -95,9 +95,9 @@ function compare_hdf5_vector_implementations(
 
     # Loading without an explicit Julia type must recover the declared element type and
     # permit the same subsequent append in both implementations.
-    old_loaded = HDF5Vectors.load_hdf5_vector(old_group[name])
+    old_loaded = HDF5Vectors.load_baseline_hdf5_vector(old_group[name])
     new_loaded = HDF5Vectors2.load_hdf5_vector(new_group[name])
-    old_typed = HDF5Vectors.load_hdf5_vector(old_group[name], T)
+    old_typed = HDF5Vectors.load_baseline_hdf5_vector(old_group[name], T)
     new_typed = HDF5Vectors2.load_hdf5_vector(new_group[name], T)
     @test eltype(old_loaded) === T
     @test eltype(new_loaded) === T
@@ -401,7 +401,7 @@ end
             )
             for (index, type) in enumerate(unsupported_types)
                 name = "unsupported_$index"
-                @test_throws ArgumentError HDF5Vectors.create_hdf5_vector(
+                @test_throws ArgumentError HDF5Vectors.create_baseline_hdf5_vector(
                     old_group,
                     name,
                     type,
