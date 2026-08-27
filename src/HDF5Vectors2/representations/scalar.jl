@@ -165,7 +165,6 @@ function create_store(
     chunk_length,
 ) where {T, H}
 
-    chunk_length = validate_chunk_length(chunk_length)
     dataspace = HDF5.dataspace((0,), (-1,))
     dataset = HDF5.create_dataset(
         group,

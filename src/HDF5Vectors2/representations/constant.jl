@@ -97,21 +97,19 @@ end
 # Physical Store #
 ##################
 
-struct ConstantStore <: AbstractStore
-    group::HDF5.Group
-end
+struct ConstantStore <: AbstractStore end
+
 function create_store(
-    group::HDF5.Group,
+    ::HDF5.Group,
     ::ConstantSchema;
     chunk_length,
 )
-    validate_chunk_length(chunk_length)
-    return ConstantStore(group)
+    return ConstantStore()
 end
 
 function open_store(group::HDF5.Group, ::ConstantSchema)
     validate_store_children(group, ())
-    return ConstantStore(group)
+    return ConstantStore()
 end
 
 physical_length(::ConstantStore) = nothing

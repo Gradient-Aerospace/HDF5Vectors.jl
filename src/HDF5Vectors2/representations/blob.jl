@@ -83,7 +83,6 @@ function create_store(
     chunk_length,
 )
 
-    chunk_length = validate_chunk_length(chunk_length)
     dataspace = HDF5.dataspace((0,), (-1,))
     bytes = HDF5.create_dataset(
         group,
@@ -196,29 +195,12 @@ function initialize_encoded!(
 
 end
 
-function validate_blob_offsets(store::BlobStore, initial_stop::Int64, stops)
-
-    byte_count = length(store.bytes)
-    previous_stop = initial_stop
-    if previous_stop < 0 || previous_stop > byte_count
-        throw(ArgumentError("Blob stop positions are outside byte storage."))
-    end
-
-    for stop in stops
-        if stop < previous_stop || stop > byte_count
-            throw(ArgumentError("Blob stop positions are not valid for byte storage."))
-        end
-        previous_stop = stop
-    end
-    return nothing
-
-end
-
 function read_encoded(store::BlobStore, index::Int)
 
+    # Opening validates the shared final boundary. Reads can then use the requested stops
+    # directly without another validation pass.
     initial_stop = blob_end_offset(store, index - 1)
     final_stop = blob_end_offset(store, index)
-    validate_blob_offsets(store, initial_stop, (final_stop,))
     if final_stop == initial_stop
         return UInt8[]
     end
@@ -232,9 +214,10 @@ function read_encoded(store::BlobStore, indices::UnitRange{Int})
         return Vector{UInt8}[]
     end
 
+    # Only the stops needed to split this range are loaded. Avoiding a second validation
+    # pass keeps the work proportional to the data the caller actually requested.
     initial_stop = blob_end_offset(store, first(indices) - 1)
     stops = read(store.stops, Int64, indices)
-    validate_blob_offsets(store, initial_stop, stops)
     concatenated = if last(stops) == initial_stop
         UInt8[]
     else

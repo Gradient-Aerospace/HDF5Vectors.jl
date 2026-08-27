@@ -311,7 +311,6 @@ function create_store(
     chunk_length,
 ) where {T, E, H, N}
 
-    chunk_length = validate_chunk_length(chunk_length)
     initial_dims = (schema.dims..., 0)
     maximum_dims = (schema.dims..., -1)
     dataspace = HDF5.dataspace(initial_dims, maximum_dims)

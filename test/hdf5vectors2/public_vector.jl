@@ -190,6 +190,23 @@ end
 
         HDF5.h5open(joinpath(directory, "public_validation.h5"), "w") do file
 
+            # Chunk length is a vector-creation option rather than an independent store
+            # concern. Both public creation paths reject it before making a destination.
+            @test_throws ArgumentError HDF5Vectors2.create_hdf5_vector(
+                file["/"],
+                "invalid_create_chunk",
+                Int64;
+                chunk_length = 0,
+            )
+            @test !haskey(file, "invalid_create_chunk")
+            @test_throws ArgumentError HDF5Vectors2.copy_to_hdf5_vector(
+                file["/"],
+                "invalid_copy_chunk",
+                Int64[1];
+                chunk_length = 0,
+            )
+            @test !haskey(file, "invalid_copy_chunk")
+
             # Bulk copying encodes every value before creating its destination. A later
             # dimension error therefore leaves no partially created vector group.
             invalid_source = [[1.0, 2.0], [3.0]]

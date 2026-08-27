@@ -76,18 +76,14 @@ end
 
         HDF5.h5open(joinpath(directory, "scalar_validation.h5"), "w") do file
 
-            # Initializing an empty collection leaves a new scalar dataset empty. Store
-            # creation continues to reject invalid physical options independently.
+            # Initializing an empty collection leaves a new scalar dataset empty. The
+            # public vector creation boundary has already validated physical options before
+            # this lower-level store is constructed.
             schema = infer_schema(Int64)
             data_group = HDF5.create_group(file, "data")
             store = HDF5Vectors2.create_store(data_group, schema; chunk_length = 2)
             HDF5Vectors2.initialize_encoded!(store, Int64[])
             @test iszero(HDF5Vectors2.physical_length(store))
-            @test_throws ArgumentError HDF5Vectors2.create_store(
-                HDF5.create_group(file, "invalid_chunk"),
-                schema;
-                chunk_length = 0,
-            )
 
             # Opening rejects a physical datatype that disagrees with the stored schema.
             invalid_group = HDF5.create_group(file, "invalid_type")

@@ -20,12 +20,12 @@ abstract type AbstractRecordCodec{T} end
 
 logical_type(::AbstractRecordCodec{T}) where {T} = T
 
-struct StructCodec{T, N} <: AbstractRecordCodec{T}
-    names::NTuple{N, Symbol}
-end
+# RecordSchema owns the meaningful field names used in metadata and HDF5 paths. The
+# built-in struct codec therefore needs only field positions to decompose a value.
+struct StructCodec{T, N} <: AbstractRecordCodec{T} end
 
-function decompose(codec::StructCodec{T, N}, value::T) where {T, N}
-    return ntuple(index -> getfield(value, codec.names[index]), N)
+function decompose(::StructCodec{T, N}, value::T) where {T, N}
+    return ntuple(index -> getfield(value, index), N)
 end
 
 function compose(::StructCodec{T}, values::Tuple) where {T}
@@ -253,8 +253,7 @@ function record_codec(::Type{T}) where {T <: StaticArrays.StaticArray}
 end
 
 function record_codec(::Type{T}) where {T}
-    names = fieldnames(T)
-    return StructCodec{T, length(names)}(names)
+    return StructCodec{T, fieldcount(T)}()
 end
 
 ###################
@@ -320,7 +319,6 @@ function create_store(
     chunk_length,
 ) where {T, N}
 
-    chunk_length = validate_chunk_length(chunk_length)
     children = ntuple(N) do index
         child_group = HDF5.create_group(group, schema.names[index])
         return create_store(
@@ -343,16 +341,14 @@ function open_store(
         return open_store(group[schema.names[index]], schema.children[index])
     end
 
-    # All nonconstant columns must describe the same number of records. Running this check
-    # while opening catches incomplete or manually altered layouts before they are read.
-    store = RecordStore(children)
-    physical_length(store)
-    return store
+    return RecordStore(children)
 
 end
 
 function physical_length(store::RecordStore)
 
+    # This is both the record's length query and its recursive consistency check. Public
+    # loading calls it once on the root store after the complete store tree has opened.
     record_length = nothing
     for (index, child) in enumerate(store.children)
         child_length = physical_length(child)

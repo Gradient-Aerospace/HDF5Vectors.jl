@@ -11,7 +11,10 @@ end
 
         HDF5.h5open(joinpath(directory, "record_storage.h5"), "w") do file
 
+            # Field names belong to the schema that describes metadata and HDF5 paths. The
+            # positional struct codec does not retain a duplicate copy of them.
             schema = infer_schema(PrototypeRecordWithDenseField)
+            @test fieldcount(typeof(schema.codec)) == 0
             values = [
                 PrototypeRecordWithDenseField(
                     PrototypePoint(1.0, 2),
@@ -83,8 +86,8 @@ end
             @test size(data_group["samples/values"]) == (2, length(values))
             @test isempty(keys(data_group["marker"]))
 
-            # Loading uses the recursively stored schema and validates the lengths of all
-            # nonconstant columns before returning the record store.
+            # Opening reconstructs the recursively stored layout. One root physical-length
+            # query then validates the lengths of every nonconstant column.
             loaded_schema = read_schema(vector_group)
             loaded_store = HDF5Vectors2.open_store(data_group, loaded_schema)
             @test HDF5Vectors2.physical_length(loaded_store) == length(values)
@@ -238,13 +241,15 @@ end
             )
 
             # Child stores may be individually valid while disagreeing about record count.
-            # Opening rejects that incomplete multi-column layout immediately.
+            # Opening constructs the recursive store, while the root physical-length check
+            # validates the complete multi-column layout once.
             unequal_group = HDF5.create_group(file, "unequal_lengths")
             unequal_dense_group = HDF5.create_group(unequal_group, "1")
             unequal_scalar_group = HDF5.create_group(unequal_group, "2")
             unequal_dense_group["values"] = zeros(Int32, 2, 1)
             unequal_scalar_group["values"] = Int64[1, 2]
-            @test_throws DimensionMismatch HDF5Vectors2.open_store(unequal_group, schema)
+            unequal_store = HDF5Vectors2.open_store(unequal_group, schema)
+            @test_throws DimensionMismatch HDF5Vectors2.physical_length(unequal_store)
 
         end
 

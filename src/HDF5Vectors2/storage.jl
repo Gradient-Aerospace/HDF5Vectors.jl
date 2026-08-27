@@ -7,6 +7,10 @@
 # keeps validation and codec failures out of the physical mutation layer.
 abstract type AbstractStore end
 
+# `create_store` methods are recursive physical constructors. The public vector layer
+# validates options shared by every representation, such as chunk length, once before it
+# enters the store tree.
+
 # Store mutation deliberately follows the two ways an HDF5Vector can grow. A bulk copy
 # calls `initialize_encoded!` exactly once on a newly created empty store. Later `push!`
 # calls pass the next logical index to `append_encoded!`. Stores do not provide replacement,
