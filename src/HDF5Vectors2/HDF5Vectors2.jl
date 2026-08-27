@@ -9,6 +9,11 @@ include("schemas.jl")
 include("inference.jl")
 include("format.jl")
 include("storage.jl")
+include("representations/scalar.jl")
+include("representations/blob.jl")
+include("representations/constant.jl")
+include("representations/dense.jl")
+include("representations/record.jl")
 include("vector.jl")
 
 export AbstractCodec, AbstractRecordCodec, AbstractSchema

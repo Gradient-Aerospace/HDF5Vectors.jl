@@ -2,20 +2,6 @@
 # Schema Inference #
 ####################
 
-const hdf5_scalar_types = Union{
-    Bool,
-    UInt8,
-    Int8,
-    UInt16,
-    Int16,
-    UInt32,
-    Int32,
-    UInt64,
-    Int64,
-    Float32,
-    Float64,
-}
-
 """
 Controls default schema inference without becoming part of storage execution.
 
@@ -122,130 +108,6 @@ function infer_child_schema(type::Type, context::SchemaContext)
     )
 end
 
-"""
-    serialization_schema(type::Type)
-
-Builds an explicit Julia-serialization schema for `type`.
-"""
-function serialization_schema(::Type{T}) where {T}
-    return BlobSchema(SerializationCodec{T}())
-end
-
-function infer_builtin_schema(type::Type{<:hdf5_scalar_types}, context::SchemaContext)
-    reject_dims(type, context.dims)
-    return ScalarSchema(IdentityCodec{type}())
-end
-
-function infer_builtin_schema(::Type{String}, context::SchemaContext)
-    reject_dims(String, context.dims)
-    return ScalarSchema(IdentityCodec{String}())
-end
-
-function infer_builtin_schema(::Type{Char}, context::SchemaContext)
-    reject_dims(Char, context.dims)
-    return ScalarSchema(CharCodec())
-end
-
-function infer_builtin_schema(::Type{Symbol}, context::SchemaContext)
-    reject_dims(Symbol, context.dims)
-    return ScalarSchema(SymbolCodec())
-end
-
-function infer_builtin_schema(
-    type::Type{T},
-    context::SchemaContext,
-) where {H <: hdf5_scalar_types, T <: Enum{H}}
-    reject_dims(type, context.dims)
-    return ScalarSchema(EnumCodec{T, H}())
-end
-
-function infer_builtin_schema(
-    type::Type{T},
-    context::SchemaContext,
-) where {H, T <: Enum{H}}
-    reject_dims(type, context.dims)
-    return unsupported_schema(type, "its enum base type $H is not HDF5-native.")
-end
-
-function infer_builtin_schema(::Type{Tuple{}}, context::SchemaContext)
-    reject_dims(Tuple{}, context.dims)
-    value = ()
-    return ConstantSchema(ConstantCodec{Tuple{}}(value))
-end
-
-function infer_builtin_schema(
-    type::Type{NTuple{N, E}},
-    context::SchemaContext,
-) where {N, E}
-
-    dims = isnothing(context.dims) ? (N,) : validate_dims(context.dims, 1)
-    if dims != (N,)
-        throw(DimensionMismatch("The dimensions $dims do not match the tuple length $N."))
-    elseif iszero(N)
-        return ConstantSchema(ConstantCodec{type}(()))
-    end
-
-    child_context = SchemaContext(context.policy, nothing)
-    element_schema = infer_child_schema(E, child_context)
-    if element_schema isa ScalarSchema
-        return DenseSchema(type, dims, element_schema.codec)
-    end
-    return record_schema(type, context)
-
-end
-
-function infer_builtin_schema(
-    type::Type{<:StaticArrays.StaticArray},
-    context::SchemaContext,
-)
-
-    expected_dims = Tuple(StaticArrays.Size(type))
-    dims = isnothing(context.dims) ? expected_dims : validate_dims(
-        context.dims,
-        length(expected_dims),
-    )
-    if dims != expected_dims
-        throw(DimensionMismatch(
-            "The dimensions $dims do not match the static dimensions $expected_dims.",
-        ))
-    elseif iszero(prod(expected_dims))
-        value = type()
-        return ConstantSchema(ConstantCodec{type}(value))
-    end
-
-    child_context = SchemaContext(context.policy, nothing)
-    element_schema = infer_child_schema(eltype(type), child_context)
-    if element_schema isa ScalarSchema
-        return DenseSchema(type, dims, element_schema.codec)
-    end
-    return record_schema(type, SchemaContext(context.policy, nothing))
-
-end
-
-function infer_builtin_schema(
-    type::Type{<:Array{E, N}},
-    context::SchemaContext,
-) where {E, N}
-
-    dims = validate_dims(context.dims, N)
-    if isnothing(dims)
-        if context.policy.serialize_arrays
-            return serialization_schema(type)
-        end
-        return unsupported_schema(type, "its dimensions were not declared.")
-    end
-
-    child_context = SchemaContext(context.policy, nothing)
-    element_schema = infer_child_schema(E, child_context)
-    if element_schema isa ScalarSchema
-        return DenseSchema(type, dims, element_schema.codec)
-    elseif context.policy.serialize_arrays
-        return serialization_schema(type)
-    end
-    return unsupported_schema(type, "its element type does not have a scalar encoding.")
-
-end
-
 function infer_builtin_schema(type::Type, context::SchemaContext)
 
     reject_dims(type, context.dims)
@@ -267,60 +129,8 @@ function infer_builtin_schema(type::Type, context::SchemaContext)
         # inspectable representation even when the type has no zero-argument constructor.
         return record_schema(type, context)
     elseif isbitstype(type) && !context.policy.portable
-        return ScalarSchema(IdentityCodec{type}())
+        return native_scalar_schema(type)
     end
     return record_schema(type, context)
 
-end
-
-function infer_constant_schema(type::Type)
-
-    if !Base.issingletontype(type)
-        return unsupported_schema(type, "it has no fields but does not have one value.")
-    elseif type === NamedTuple{(), Tuple{}}
-        value = (;)
-    elseif applicable(type)
-        value = type()
-    else
-        return unsupported_schema(
-            type,
-            "its constant value cannot be reconstructed through a supported interface.",
-        )
-    end
-
-    if !(value isa type)
-        return unsupported_schema(
-            type,
-            "its zero-argument constructor returned $(typeof(value)).",
-        )
-    end
-    return ConstantSchema(ConstantCodec{type}(value))
-
-end
-
-function record_schema(type::Type, context::SchemaContext)
-
-    field_names = fieldnames(type)
-    names = Tuple(string(field_name) for field_name in field_names)
-    types = fieldtypes(type)
-    children = Tuple(
-        infer_child_schema(field_type, SchemaContext(context.policy, nothing))
-        for field_type in types
-    )
-
-    codec = record_codec(type)
-    return RecordSchema(type, names, codec, children)
-
-end
-
-record_codec(::Type{T}) where {T <: NamedTuple} = NamedTupleCodec{T}()
-record_codec(::Type{T}) where {T <: Tuple} = TupleCodec{T}()
-
-function record_codec(::Type{T}) where {T <: StaticArrays.StaticArray}
-    return StaticArrayCodec{T}()
-end
-
-function record_codec(::Type{T}) where {T}
-    names = fieldnames(T)
-    return StructCodec{T, length(names)}(names)
 end

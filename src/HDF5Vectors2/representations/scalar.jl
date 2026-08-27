@@ -1,0 +1,262 @@
+#########################
+# Scalar Representation #
+#########################
+
+# This file is a complete built-in representation example. It defines logical codecs, the
+# schema that owns them, schema inference, human-readable format metadata, and the physical
+# HDF5 store used to execute that schema.
+
+#################
+# Scalar Codecs #
+#################
+
+struct IdentityCodec{T} <: AbstractCodec{T, T} end
+
+encode_value(::IdentityCodec{T}, value::T) where {T} = value
+decode_value(::IdentityCodec{T}, value::T) where {T} = value
+
+struct CharCodec <: AbstractCodec{Char, Int32} end
+
+encode_value(::CharCodec, value::Char) = Int32(value)
+decode_value(::CharCodec, value::Int32) = Char(value)
+
+struct SymbolCodec <: AbstractCodec{Symbol, String} end
+
+encode_value(::SymbolCodec, value::Symbol) = String(value)
+decode_value(::SymbolCodec, value::String) = Symbol(value)
+
+struct EnumCodec{T, H} <: AbstractCodec{T, H} end
+
+encode_value(::EnumCodec{T, H}, value::T) where {T, H} = H(value)
+decode_value(::EnumCodec{T, H}, value::H) where {T, H} = T(value)
+
+
+#################
+# Scalar Schema #
+#################
+
+struct ScalarSchema{T, H, C <: AbstractCodec{T, H}} <: AbstractSchema{T}
+    codec::C
+end
+
+encoded_type(::ScalarSchema{T, H}) where {T, H} = H
+encoded_value_type(::ScalarSchema{T, H}) where {T, H} = H
+encode_value(schema::ScalarSchema{T}, value::T) where {T} = encode_value(
+    schema.codec,
+    value,
+)
+
+decode_value(schema::ScalarSchema, value) = decode_value(schema.codec, value)
+# HDF5 can consume and produce the same vector representation used by an identity scalar
+# codec. Returning the collection directly avoids a copy on both sides of the boundary.
+function encode_batch(
+    ::ScalarSchema{T, T, IdentityCodec{T}},
+    values::AbstractVector{T},
+) where {T}
+    return values
+end
+
+function decode_batch(
+    ::ScalarSchema{T, T, IdentityCodec{T}},
+    encoded::Vector{T},
+) where {T}
+    return encoded
+end
+
+####################
+# Schema Inference #
+####################
+
+const hdf5_scalar_types = Union{
+    Bool,
+    UInt8,
+    Int8,
+    UInt16,
+    Int16,
+    UInt32,
+    Int32,
+    UInt64,
+    Int64,
+    Float32,
+    Float64,
+}
+
+native_scalar_schema(type::Type) = ScalarSchema(IdentityCodec{type}())
+
+function infer_builtin_schema(type::Type{<:hdf5_scalar_types}, context::SchemaContext)
+    reject_dims(type, context.dims)
+    return ScalarSchema(IdentityCodec{type}())
+end
+
+function infer_builtin_schema(::Type{String}, context::SchemaContext)
+    reject_dims(String, context.dims)
+    return ScalarSchema(IdentityCodec{String}())
+end
+
+function infer_builtin_schema(::Type{Char}, context::SchemaContext)
+    reject_dims(Char, context.dims)
+    return ScalarSchema(CharCodec())
+end
+
+function infer_builtin_schema(::Type{Symbol}, context::SchemaContext)
+    reject_dims(Symbol, context.dims)
+    return ScalarSchema(SymbolCodec())
+end
+
+function infer_builtin_schema(
+    type::Type{T},
+    context::SchemaContext,
+) where {H <: hdf5_scalar_types, T <: Enum{H}}
+    reject_dims(type, context.dims)
+    return ScalarSchema(EnumCodec{T, H}())
+end
+
+function infer_builtin_schema(
+    type::Type{T},
+    context::SchemaContext,
+) where {H, T <: Enum{H}}
+    reject_dims(type, context.dims)
+    return unsupported_schema(type, "its enum base type $H is not HDF5-native.")
+end
+
+
+###################
+# Stored Metadata #
+###################
+
+function write_schema_node(group::HDF5.Group, schema::ScalarSchema)
+    write_common_schema(group, "scalar", schema)
+    write_encoded_type(group, schema)
+    write_codec(group, schema.codec)
+    return nothing
+end
+
+function validate_schema_node(group::HDF5.Group, schema::ScalarSchema)
+    validate_common_schema(group, "scalar", schema)
+    validate_encoded_type(group, schema)
+    validate_codec(group, schema.codec)
+    return schema
+end
+
+
+##################
+# Physical Store #
+##################
+
+struct ScalarStore{H} <: AbstractStore
+    dataset::HDF5.Dataset
+end
+function create_store(
+    group::HDF5.Group,
+    schema::ScalarSchema{T, H};
+    chunk_length,
+) where {T, H}
+
+    chunk_length = validate_chunk_length(chunk_length)
+    dataspace = HDF5.dataspace((0,), (-1,))
+    dataset = HDF5.create_dataset(
+        group,
+        "values",
+        H,
+        dataspace;
+        chunk = (chunk_length,),
+    )
+    return ScalarStore{H}(dataset)
+
+end
+
+function open_store(group::HDF5.Group, ::ScalarSchema{T, H}) where {T, H}
+
+    validate_store_children(group, ("values",))
+    dataset = group["values"]
+    if ndims(dataset) != 1
+        throw(DimensionMismatch(
+            "Scalar storage must be one-dimensional, but its size is $(size(dataset)).",
+        ))
+    elseif !dataset_matches_encoded_type(dataset, H)
+        throw(ArgumentError(
+            "Scalar storage does not use the HDF5 datatype required for $H.",
+        ))
+    end
+    return ScalarStore{H}(dataset)
+
+end
+
+physical_length(store::ScalarStore) = length(store.dataset)
+
+function validate_write_start(store::ScalarStore, start::Int)
+    return validate_fixed_width_write_start(store, start)
+end
+
+###########################
+# Scalar Store Operations #
+###########################
+
+function write_encoded!(store::ScalarStore{H}, index::Int, value::H) where {H}
+    current_length = validate_write_start(store, index)
+    if index > current_length
+        HDF5.set_extent_dims(store.dataset, (index,))
+    end
+    store.dataset[index] = value
+    return store
+end
+
+function write_encoded_batch!(
+    store::ScalarStore{H},
+    start::Int,
+    values::AbstractVector{H},
+) where {H}
+
+    current_length = validate_write_start(store, start)
+    if isempty(values)
+        return store
+    end
+
+    final_index = start + length(values) - 1
+    if final_index > current_length
+        HDF5.set_extent_dims(store.dataset, (final_index,))
+    end
+    store.dataset[start:final_index] = values
+    return store
+
+end
+
+function read_encoded(store::ScalarStore{H}, index::Int) where {H}
+    if index < 1 || index > physical_length(store)
+        throw(BoundsError(store, index))
+    end
+    return read(store.dataset, H, index)
+end
+
+function read_encoded(store::ScalarStore{H}, indices::UnitRange{Int}) where {H}
+    if isempty(indices)
+        return H[]
+    elseif first(indices) < 1 || last(indices) > physical_length(store)
+        throw(BoundsError(store, indices))
+    end
+    return read(store.dataset, H, indices)
+end
+
+function truncate_store!(store::ScalarStore, count::Int)
+    current_length = physical_length(store)
+    if count < 0 || count > current_length
+        throw(BoundsError(0:current_length, count))
+    end
+    HDF5.set_extent_dims(store.dataset, (count,))
+    return store
+end
+
+stored_value_type(::ScalarStore{H}) where {H} = H
+validate_encoded(::ScalarStore{H}, ::H) where {H} = nothing
+function validate_encoded_batch(
+    ::ScalarStore{H},
+    values::AbstractVector{H},
+    expected_count::Int,
+) where {H}
+    return validate_encoded_column_count(values, expected_count)
+end
+function append_encoded!(store::ScalarStore{H}, index::Int, value::H) where {H}
+    HDF5.set_extent_dims(store.dataset, (index,))
+    store.dataset[index] = value
+    return store
+end
