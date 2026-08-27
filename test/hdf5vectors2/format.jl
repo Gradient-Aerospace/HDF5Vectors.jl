@@ -14,6 +14,11 @@
                 ("symbol", infer_schema(Symbol), :ready),
                 ("enum", infer_schema(PrototypeUInt8Enum), prototype_max),
                 ("application_codec", infer_schema(PrototypeGrade), PrototypeGrade("A")),
+                (
+                    "json_codec",
+                    infer_schema(PrototypeJSONValue),
+                    PrototypeJSONValue("format", [1, 2]),
+                ),
                 ("tuple", infer_schema(NTuple{2, Char}), ('a', 'b')),
                 (
                     "static_array",
@@ -75,6 +80,10 @@
                 file["application_codec"],
                 PrototypeGrade,
             ).codec isa PrototypeGradeCodec
+            @test read_schema(file["json_codec"]).codec isa
+                JSONCodec{PrototypeJSONValue}
+            @test read_schema(file["json_codec"], PrototypeJSONValue).codec isa
+                JSONCodec{PrototypeJSONValue}
 
             # Loading follows the stored representation, not the current default policy.
             # The two groups have the same logical type but retain different schemas.

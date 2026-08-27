@@ -25,6 +25,11 @@ struct SymbolCodec <: AbstractCodec{Symbol, String} end
 encode_value(::SymbolCodec, value::Symbol) = String(value)
 decode_value(::SymbolCodec, value::String) = Symbol(value)
 
+# JSON storage has the same physical shape as ordinary scalar string storage. The codec
+# belongs to the core schema vocabulary so schemas containing it can be constructed and
+# deserialized without JSON3. Its conversion methods are supplied only when JSON3 loads.
+struct JSONCodec{T} <: AbstractCodec{T, String} end
+
 struct EnumCodec{T, H} <: AbstractCodec{T, H} end
 
 encode_value(::EnumCodec{T, H}, value::T) where {T, H} = H(value)
@@ -38,6 +43,14 @@ decode_value(::EnumCodec{T, H}, value::H) where {T, H} = T(value)
 struct ScalarSchema{T, H, C <: AbstractCodec{T, H}} <: AbstractSchema{T}
     codec::C
 end
+
+"""
+    json_schema(type::Type)
+
+Returns a scalar schema that stores each value as a JSON string. JSON3 must be loaded before
+values can be encoded or decoded.
+"""
+json_schema(::Type{T}) where {T} = ScalarSchema(JSONCodec{T}())
 
 encoded_type(::ScalarSchema{T, H}) where {T, H} = H
 encoded_value_type(::ScalarSchema{T, H}) where {T, H} = H

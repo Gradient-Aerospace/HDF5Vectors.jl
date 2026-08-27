@@ -1489,4 +1489,9 @@ function storage_style(::Type{SArray{S, T, D, L}}; dims = nothing, kwargs...) wh
     return fixed_array_storage_style(T, dims; kwargs...)
 end
 
+# The replacement implementation remains namespaced while it is evaluated alongside the
+# released interface. Loading it as a submodule lets ordinary Julia package extensions add
+# optional codec methods without putting an optional dependency in the prototype's core.
+include("HDF5Vectors2/HDF5Vectors2.jl")
+
 end # module HDF5Vectors

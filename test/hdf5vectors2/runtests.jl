@@ -1,6 +1,10 @@
-include(joinpath(@__DIR__, "..", "..", "src", "HDF5Vectors2", "HDF5Vectors2.jl"))
+import HDF5Vectors
+import JSON3
+using Test
 
-using .HDF5Vectors2:
+const HDF5Vectors2 = HDF5Vectors.HDF5Vectors2
+
+using HDF5Vectors.HDF5Vectors2:
     AbstractCodec,
     AbstractRecordCodec,
     AbstractSchema,
@@ -13,6 +17,7 @@ using .HDF5Vectors2:
     CharCodec,
     SymbolCodec,
     EnumCodec,
+    JSONCodec,
     SerializationCodec,
     StructCodec,
     TupleCodec,
@@ -21,6 +26,7 @@ using .HDF5Vectors2:
     ConstantCodec,
     SchemaPolicy,
     infer_schema,
+    json_schema,
     serialization_schema,
     logical_type,
     encoded_type,
@@ -30,7 +36,6 @@ using .HDF5Vectors2:
     read_schema
 import EnumX
 import HDF5
-import HDF5Vectors
 import StaticArrays
 
 include("schema_and_codecs.jl")

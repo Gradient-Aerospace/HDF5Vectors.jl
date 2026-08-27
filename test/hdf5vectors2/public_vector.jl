@@ -85,6 +85,14 @@ end
                     (;),
                 ),
                 (
+                    "json_codecs",
+                    [
+                        PrototypeJSONValue("first", [1, 2]),
+                        PrototypeJSONValue("second", [3, 4, 5]),
+                    ],
+                    (;),
+                ),
+                (
                     "dense_arrays",
                     [[1.0, 2.0], [3.0, 4.0]],
                     (; dims = (2,)),
@@ -92,6 +100,20 @@ end
                 (
                     "records",
                     [PrototypePoint(1.0, 2), PrototypePoint(3.0, 4)],
+                    (;),
+                ),
+                (
+                    "records_with_json",
+                    [
+                        PrototypeJSONRecord(
+                            PrototypeJSONValue("first", [1, 2]),
+                            1.5,
+                        ),
+                        PrototypeJSONRecord(
+                            PrototypeJSONValue("second", [3, 4, 5]),
+                            2.5,
+                        ),
+                    ],
                     (;),
                 ),
                 (
@@ -111,12 +133,17 @@ end
                 test_public_hdf5_vector(file, name, source; kwargs...)
             end
             @test read(file["application_codecs/data/values"]) == UInt8['A', 'B']
+            json_source = cases[4][2]
+            @test read(file["json_codecs/data/values"]) == JSON3.write.(json_source)
+            @test read(file["records_with_json/data/details/values"]) ==
+                JSON3.write.(getproperty.(cases[7][2], :details))
 
             # Empty copies still need a concrete encoded batch type. Exercising every
             # schema shape here prevents empty records or blobs from degrading to an
             # untyped collection that cannot reach the physical bulk-write method.
             empty_cases = (
                 ("empty_scalars", Float64[], (;)),
+                ("empty_json", PrototypeJSONValue[], (;)),
                 ("empty_dense", Vector{Vector{Float64}}(), (; dims = (2,))),
                 ("empty_records", PrototypePoint[], (;)),
                 ("empty_blobs", Vector{Vector{Float64}}(), (;)),

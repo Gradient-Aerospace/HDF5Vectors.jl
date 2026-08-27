@@ -57,9 +57,36 @@ function HDF5Vectors2.infer_schema(::Type{PrototypeGrade}; kwargs...)
     return ScalarSchema(PrototypeGradeCodec())
 end
 
+# JSON is another logical conversion over scalar storage rather than a separate physical
+# schema. Declaring JSON3's struct mapping makes this small type readable in both
+# directions; selecting `json_schema` opts only this application type into that codec.
+struct PrototypeJSONValue
+    name::String
+    values::Vector{Int64}
+end
+
+function Base.:(==)(first::PrototypeJSONValue, second::PrototypeJSONValue)
+    return first.name == second.name && first.values == second.values
+end
+
+JSON3.StructTypes.StructType(::Type{PrototypeJSONValue}) = JSON3.StructTypes.Struct()
+
+function HDF5Vectors2.infer_schema(::Type{PrototypeJSONValue}; kwargs...)
+    return json_schema(PrototypeJSONValue)
+end
+
 struct PrototypeGradedValue
     grade::PrototypeGrade
     value::Float64
+end
+
+struct PrototypeJSONRecord
+    details::PrototypeJSONValue
+    value::Float64
+end
+
+function Base.:(==)(first::PrototypeJSONRecord, second::PrototypeJSONRecord)
+    return first.details == second.details && first.value == second.value
 end
 
 function test_schema_round_trip(schema, value)
@@ -102,6 +129,15 @@ end
         @test grade_schema isa ScalarSchema
         @test encoded_type(grade_schema) === UInt8
         test_schema_round_trip(grade_schema, PrototypeGrade("A"))
+
+        # JSON values use the same scalar-string store as ordinary strings. Loading JSON3
+        # contributes only the codec operations, while the core owns the schema itself.
+        json_value = PrototypeJSONValue("example", [1, 2, 3])
+        json_value_schema = infer_schema(PrototypeJSONValue)
+        @test json_value_schema isa ScalarSchema
+        @test json_value_schema.codec isa JSONCodec{PrototypeJSONValue}
+        @test encoded_type(json_value_schema) === String
+        test_schema_round_trip(json_value_schema, json_value)
 
     end
 

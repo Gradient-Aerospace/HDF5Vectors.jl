@@ -8,6 +8,22 @@ import HDF5
 import JSON3
 import HDF5Vectors
 
+const HDF5Vectors2 = HDF5Vectors.HDF5Vectors2
+
+function HDF5Vectors2.encode_value(
+    ::HDF5Vectors2.JSONCodec{T},
+    value::T,
+) where {T}
+    return JSON3.write(value)
+end
+
+function HDF5Vectors2.decode_value(
+    ::HDF5Vectors2.JSONCodec{T},
+    value::String,
+) where {T}
+    return JSON3.read(value, T)
+end
+
 # Create a type to handle anything that needs to go to/from JSON. We'll just store a single-
 # dataset HDF5 vector of strings inside.
 mutable struct HDF5VectorWithJSONStorage{T} <: HDF5Vectors.AbstractHDF5Vector{T}
