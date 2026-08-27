@@ -190,8 +190,6 @@ function decode_batch(
 
 end
 
-# A type check before assignment prevents a typed logical column from silently converting
-
 ####################
 # Schema Inference #
 ####################
@@ -356,10 +354,6 @@ end
 
 physical_length(store::DenseStore{H, N}) where {H, N} = size(store.dataset, N + 1)
 
-function validate_write_start(store::DenseStore, start::Int)
-    return validate_fixed_width_write_start(store, start)
-end
-
 ##########################
 # Dense Store Operations #
 ##########################
@@ -378,26 +372,6 @@ function validate_dense_frame(store::DenseStore, frame::Array)
         ))
     end
     return frame
-end
-
-function write_encoded!(
-    store::DenseStore{H, N},
-    index::Int,
-    frame::Array{H, N},
-) where {H, N}
-
-    # Validation happens before extending the dataset. A rejected frame therefore cannot
-    # leave an unwritten physical slot at the end of the store.
-    validate_dense_frame(store, frame)
-    current_length = validate_write_start(store, index)
-    if index > current_length
-        HDF5.set_extent_dims(store.dataset, dense_extent(store, index))
-    end
-
-    selection = (dense_colons(store)..., index:index)
-    store.dataset[selection...] = reshape(frame, (store.dims..., 1))
-    return store
-
 end
 
 function stack_dense_frames(
@@ -419,26 +393,19 @@ function stack_dense_frames(
 
 end
 
-function write_encoded_batch!(
+function initialize_encoded!(
     store::DenseStore{H, N},
-    start::Int,
     frames::AbstractVector{<:Array{H, N}},
 ) where {H, N}
 
-    current_length = validate_write_start(store, start)
-    if isempty(frames)
-        return store
-    end
-
     # Stacking validates the complete batch before the dataset extent changes.
     stacked = stack_dense_frames(store, frames)
-    return write_encoded_batch!(store, start, stacked)
+    return initialize_encoded!(store, stacked)
 
 end
 
-function write_encoded_batch!(
+function initialize_encoded!(
     store::DenseStore{H, N},
-    start::Int,
     stacked::Array{H, M},
 ) where {H, N, M}
 
@@ -454,17 +421,12 @@ function write_encoded_batch!(
         ))
     end
 
-    current_length = validate_write_start(store, start)
     if iszero(frame_count)
         return store
     end
 
-    final_index = start + frame_count - 1
-    if final_index > current_length
-        HDF5.set_extent_dims(store.dataset, dense_extent(store, final_index))
-    end
-
-    selection = (dense_colons(store)..., start:final_index)
+    HDF5.set_extent_dims(store.dataset, dense_extent(store, frame_count))
+    selection = (dense_colons(store)..., Colon())
     store.dataset[selection...] = stacked
     return store
 
@@ -519,15 +481,6 @@ function read_encoded(
     stacked = read(store.dataset, H, selection...)
     return [Array(selectdim(stacked, N + 1, index)) for index in 1:length(indices)]
 
-end
-
-function truncate_store!(store::DenseStore, count::Int)
-    current_length = physical_length(store)
-    if count < 0 || count > current_length
-        throw(BoundsError(0:current_length, count))
-    end
-    HDF5.set_extent_dims(store.dataset, dense_extent(store, count))
-    return store
 end
 
 stored_value_type(::DenseStore{H, N}) where {H, N} = Array{H, N}

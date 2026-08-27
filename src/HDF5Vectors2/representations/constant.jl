@@ -130,30 +130,11 @@ end
 #############################
 
 # Constant values have no physical payload. The vector-level logical length determines how
-# many values exist, so these operations require the caller to perform ordinary bounds
-# checks against that length.
-function validate_write_start(::ConstantStore, start::Int)
-    if start < 1
-        throw(BoundsError(1:typemax(Int), start))
-    end
-    return nothing
-end
-
-function write_encoded!(store::ConstantStore, index::Int, ::Nothing)
-    if index < 1
-        throw(BoundsError(1:typemax(Int), index))
-    end
-    return store
-end
-
-function write_encoded_batch!(
+# many values exist, so initialization and append operations do not change the store.
+function initialize_encoded!(
     store::ConstantStore,
-    start::Int,
-    values::AbstractVector{Nothing},
+    ::AbstractVector{Nothing},
 )
-    if start < 1
-        throw(BoundsError(1:typemax(Int), start))
-    end
     return store
 end
 
@@ -171,10 +152,4 @@ function read_encoded(::ConstantStore, indices::UnitRange{Int})
     return fill(nothing, length(indices))
 end
 
-function truncate_store!(store::ConstantStore, count::Int)
-    if count < 0
-        throw(BoundsError(0:typemax(Int), count))
-    end
-    return store
-end
 append_encoded!(store::ConstantStore, ::Int, ::Nothing) = store

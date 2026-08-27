@@ -36,16 +36,17 @@
                     chunk_length = 2,
                 )
 
-                first_value = encode_value(schema, first(values))
-                remaining_values = [encode_value(schema, value) for value in values[2:end]]
-                HDF5Vectors2.write_encoded!(store, 1, first_value)
-                HDF5Vectors2.write_encoded_batch!(store, 2, remaining_values)
+                initial_values = values[1:(end - 1)]
+                initial_encoded = HDF5Vectors2.encode_batch(schema, initial_values)
+                HDF5Vectors2.initialize_encoded!(store, initial_encoded)
+                final_encoded = encode_value(schema, last(values))
+                HDF5Vectors2.append_encoded!(store, length(values), final_encoded)
 
                 @test HDF5Vectors2.physical_length(store) == length(values)
                 first_encoded = HDF5Vectors2.read_encoded(store, 1)
                 @test decode_value(schema, first_encoded) == first(values)
-                encoded = HDF5Vectors2.read_encoded(store, 1:length(values))
-                @test [decode_value(schema, value) for value in encoded] == values
+                encoded = HDF5Vectors2.read_encoded_batch(store, 1:length(values))
+                @test HDF5Vectors2.decode_batch(schema, encoded) == values
                 @test HDF5Vectors2.dataset_matches_encoded_type(
                     data_group["values"],
                     encoded_type(schema),
@@ -69,27 +70,19 @@
 
 end
 
-@testset "HDF5Vectors2 scalar tails and validation" begin
+@testset "HDF5Vectors2 scalar validation" begin
 
     mktempdir() do directory
 
         HDF5.h5open(joinpath(directory, "scalar_validation.h5"), "w") do file
 
-            # A later vector-level write can overwrite an uncommitted physical tail at the
-            # next logical index. Stores also support explicit truncation for blob recovery
-            # and future repair operations.
+            # Initializing an empty collection leaves a new scalar dataset empty. Store
+            # creation continues to reject invalid physical options independently.
             schema = infer_schema(Int64)
             data_group = HDF5.create_group(file, "data")
             store = HDF5Vectors2.create_store(data_group, schema; chunk_length = 2)
-            HDF5Vectors2.write_encoded_batch!(store, 1, Int64[1, 2, 99])
-            HDF5Vectors2.write_encoded!(store, 3, Int64(3))
-            @test HDF5Vectors2.read_encoded(store, 1:3) == [1, 2, 3]
-
-            HDF5Vectors2.truncate_store!(store, 2)
-            @test HDF5Vectors2.physical_length(store) == 2
-            @test_throws BoundsError HDF5Vectors2.read_encoded(store, 3)
-            @test_throws BoundsError HDF5Vectors2.write_encoded!(store, 4, Int64(4))
-            @test_throws BoundsError HDF5Vectors2.truncate_store!(store, 3)
+            HDF5Vectors2.initialize_encoded!(store, Int64[])
+            @test iszero(HDF5Vectors2.physical_length(store))
             @test_throws ArgumentError HDF5Vectors2.create_store(
                 HDF5.create_group(file, "invalid_chunk"),
                 schema;
@@ -133,17 +126,17 @@ end
                     chunk_length = 2,
                 )
 
+                HDF5Vectors2.initialize_encoded!(store, fill(nothing, 2))
                 encoded = encode_value(schema, value)
-                HDF5Vectors2.write_encoded!(store, 1, encoded)
-                HDF5Vectors2.write_encoded_batch!(store, 2, fill(nothing, 2))
+                HDF5Vectors2.append_encoded!(store, 3, encoded)
                 @test isempty(keys(data_group))
                 @test isnothing(HDF5Vectors2.physical_length(store))
                 @test decode_value(schema, HDF5Vectors2.read_encoded(store, 1)) == value
 
                 loaded_schema = read_schema(vector_group)
                 loaded_store = HDF5Vectors2.open_store(data_group, loaded_schema)
-                loaded = HDF5Vectors2.read_encoded(loaded_store, 1:3)
-                decoded = [decode_value(loaded_schema, item) for item in loaded]
+                loaded = HDF5Vectors2.read_encoded_batch(loaded_store, 1:3)
+                decoded = HDF5Vectors2.decode_batch(loaded_schema, loaded)
                 @test decoded == fill(value, 3)
 
             end

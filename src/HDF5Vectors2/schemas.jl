@@ -14,7 +14,8 @@ A new physical schema implements one vertical protocol:
 * `encode_value`, `decode_value`, and `encoded_value_type` describe pure conversion.
 * `write_schema_node` and `validate_schema_node` describe stored metadata.
 * `create_store`, `open_store`, and `physical_length` manage its HDF5 representation.
-* `append_encoded!` and `read_encoded` provide scalar access.
+* `initialize_encoded!` writes a complete encoded batch into a newly created empty store.
+* `append_encoded!`, `read_encoded`, and `read_encoded_batch` provide append and read access.
 
 Batch conversion and storage methods can specialize the generic fallbacks when the physical
 representation supports more efficient whole-column I/O. The files under `representations`

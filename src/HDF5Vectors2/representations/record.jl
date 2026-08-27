@@ -402,8 +402,8 @@ function validate_encoded(store::RecordStore, value::Tuple)
 end
 
 # Record batches arrive with one recursively encoded column per child store. This complete
-# preflight happens before the first child changes, retaining the protection previously
-# provided by validating every encoded row.
+# preflight happens before the first child changes, so a malformed later column cannot
+# leave earlier columns initialized while later ones remain empty.
 function validate_encoded_batch(
     store::RecordStore,
     batch::RecordBatch,
@@ -433,54 +433,13 @@ function validate_encoded_batch(
 
 end
 
-function validate_write_start(store::RecordStore, start::Int)
-    current_length = physical_length(store)
-    if isnothing(current_length)
-        if start < 1
-            throw(BoundsError(1:typemax(Int), start))
-        end
-    elseif start < 1 || start > current_length + 1
-        throw(BoundsError(1:(current_length + 1), start))
-    end
-
-    # Child stores can impose a narrower rule than the record as a whole. In particular,
-    # a blob child is append-only, so it must reject an existing index before an earlier
-    # fixed-width child has been changed.
-    for child in store.children
-        validate_write_start(child, start)
-    end
-    return current_length
-end
-
-function write_encoded!(store::RecordStore, index::Int, value::Tuple)
-
-    # Recursive validation finishes before the first child store changes. Codec failures
-    # have already occurred above this layer, while ordinary shape or type errors are
-    # caught here before any record column is extended.
-    validate_record_value(store, value)
-    validate_write_start(store, index)
-    for child_index in eachindex(store.children)
-        write_encoded!(
-            store.children[child_index],
-            index,
-            value[child_index],
-        )
-    end
-    return store
-
-end
-
-function write_encoded_batch!(
+function initialize_encoded!(
     store::RecordStore,
-    start::Int,
     values::AbstractVector{<:Tuple},
 )
 
-    validate_write_start(store, start)
-
     # Preflighting the complete batch keeps a bad value in a later record from leaving
-    # earlier columns longer than later columns. An HDF5 failure between child writes can
-    # still produce unequal physical lengths, which reopening detects explicitly.
+    # earlier columns initialized while later columns remain empty.
     for value in values
         validate_record_value(store, value)
     end
@@ -491,15 +450,14 @@ function write_encoded_batch!(
         for value_index in eachindex(values)
             child_values[value_index] = values[value_index][child_index]
         end
-        write_encoded_batch!(child, start, child_values)
+        initialize_encoded!(child, child_values)
     end
     return store
 
 end
 
-function write_encoded_batch!(
+function initialize_encoded!(
     store::RecordStore,
-    start::Int,
     batch::RecordBatch,
 )
 
@@ -507,12 +465,10 @@ function write_encoded_batch!(
     # can therefore receive its natural batch representation directly, with no row-to-
     # column rearrangement inside the storage layer.
     validate_encoded_batch(store, batch)
-    validate_write_start(store, start)
 
     for index in eachindex(store.children)
-        write_encoded_batch!(
+        initialize_encoded!(
             store.children[index],
-            start,
             batch.columns[index],
         )
     end
@@ -570,24 +526,6 @@ function read_encoded_batch(store::RecordStore, indices::UnitRange{Int})
     # columns recursively and constructs only the final logical record vector.
     columns = map(child -> read_encoded_batch(child, indices), store.children)
     return RecordBatch(columns, length(indices))
-
-end
-
-function truncate_store!(store::RecordStore, count::Int)
-
-    current_length = physical_length(store)
-    if isnothing(current_length)
-        if count < 0
-            throw(BoundsError(0:typemax(Int), count))
-        end
-    elseif count < 0 || count > current_length
-        throw(BoundsError(0:current_length, count))
-    end
-
-    for child in store.children
-        truncate_store!(child, count)
-    end
-    return store
 
 end
 

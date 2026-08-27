@@ -7,6 +7,11 @@
 # keeps validation and codec failures out of the physical mutation layer.
 abstract type AbstractStore end
 
+# Store mutation deliberately follows the two ways an HDF5Vector can grow. A bulk copy
+# calls `initialize_encoded!` exactly once on a newly created empty store. Later `push!`
+# calls pass the next logical index to `append_encoded!`. Stores do not provide replacement,
+# arbitrary-position batch writes, or truncation because the public vector is append-only.
+
 function validate_chunk_length(chunk_length)
     if !(chunk_length isa Integer) || chunk_length isa Bool || chunk_length <= 0
         throw(ArgumentError(
@@ -39,14 +44,6 @@ function dataset_matches_encoded_type(dataset::HDF5.Dataset, encoded_type::Type)
         close(stored_datatype)
         close(expected_datatype)
     end
-end
-
-function validate_fixed_width_write_start(store, start::Int)
-    current_length = physical_length(store)
-    if start < 1 || start > current_length + 1
-        throw(BoundsError(1:(current_length + 1), start))
-    end
-    return current_length
 end
 
 # Most stores already return a vector of encoded logical values for a range. Dense storage

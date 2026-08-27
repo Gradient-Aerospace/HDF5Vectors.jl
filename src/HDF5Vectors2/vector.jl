@@ -303,7 +303,7 @@ function copy_to_hdf5_vector(
         chunk_length,
         inference_options = (; dims, policy),
     )
-    write_encoded_batch!(vector.store, 1, encoded)
+    initialize_encoded!(vector.store, encoded)
     persist_count!(vector, length(collection))
     return vector
 

@@ -39,8 +39,8 @@
                 )
 
                 encoded = [encode_value(schema, value) for value in values]
-                HDF5Vectors2.write_encoded!(store, 1, first(encoded))
-                HDF5Vectors2.write_encoded_batch!(store, 2, encoded[2:end])
+                HDF5Vectors2.initialize_encoded!(store, encoded[1:(end - 1)])
+                HDF5Vectors2.append_encoded!(store, length(encoded), last(encoded))
 
                 @test HDF5Vectors2.physical_length(store) == length(values)
                 @test Set(String(child) for child in keys(data_group)) ==
@@ -51,8 +51,8 @@
 
                 first_encoded = HDF5Vectors2.read_encoded(store, 1)
                 @test decode_value(schema, first_encoded) == first(values)
-                stored = HDF5Vectors2.read_encoded(store, 1:length(values))
-                @test [decode_value(schema, item) for item in stored] == values
+                stored = HDF5Vectors2.read_encoded_batch(store, 1:length(values))
+                @test HDF5Vectors2.decode_batch(schema, stored) == values
 
                 loaded_schema = read_schema(vector_group)
                 loaded_store = HDF5Vectors2.open_store(data_group, loaded_schema)
@@ -85,27 +85,11 @@ end
             store = HDF5Vectors2.create_store(data_group, schema; chunk_length = 8)
 
             encoded = [encode_value(schema, value) for value in values]
-            HDF5Vectors2.write_encoded_batch!(store, 1, encoded)
+            HDF5Vectors2.initialize_encoded!(store, encoded)
             @test size(data_group["point/x/values"]) == (2,)
             @test size(data_group["label/values"]) == (2,)
             @test Set(String(child) for child in keys(data_group["values"])) ==
                 Set(["bytes", "stops"])
-
-            # A blob child makes the complete record append-only. The recursive preflight
-            # rejects replacement before earlier fixed-width fields can be overwritten.
-            replacement = PrototypeSample(
-                PrototypePoint(9.0, 10),
-                :replacement,
-                [11.0],
-            )
-            replacement_encoded = encode_value(schema, replacement)
-            @test_throws BoundsError HDF5Vectors2.write_encoded!(
-                store,
-                2,
-                replacement_encoded,
-            )
-            @test read(data_group["point/x/values"])[2] == 5.0
-            @test read(data_group["label/values"])[2] == "second"
 
             loaded_schema = read_schema(vector_group)
             loaded_store = HDF5Vectors2.open_store(data_group, loaded_schema)
@@ -118,7 +102,7 @@ end
 
 end
 
-@testset "HDF5Vectors2 blob tails and validation" begin
+@testset "HDF5Vectors2 blob layout validation" begin
 
     mktempdir() do directory
 
@@ -127,19 +111,15 @@ end
             schema = serialization_schema(Vector{Int64})
             data_group = HDF5.create_group(file, "data")
             store = HDF5Vectors2.create_store(data_group, schema; chunk_length = 4)
-            first_value = encode_value(schema, Int64[1, 2])
-            second_value = encode_value(schema, Int64[3])
-            HDF5Vectors2.write_encoded_batch!(store, 1, [first_value, second_value])
-
-            # Blob writes are append-only because replacing one variable-length payload
-            # would require shifting every later byte and stop. Explicit truncation permits
-            # a caller to discard a tail before appending its replacement.
-            @test_throws BoundsError HDF5Vectors2.write_encoded!(store, 2, second_value)
-            @test_throws BoundsError HDF5Vectors2.write_encoded!(store, 4, second_value)
-            HDF5Vectors2.truncate_store!(store, 1)
-            HDF5Vectors2.write_encoded!(store, 2, second_value)
-            @test decode_value(schema, HDF5Vectors2.read_encoded(store, 2)) == Int64[3]
-            @test_throws BoundsError HDF5Vectors2.truncate_store!(store, 3)
+            encoded = HDF5Vectors2.encode_batch(
+                schema,
+                [Int64[1, 2], Int64[3]],
+            )
+            HDF5Vectors2.initialize_encoded!(store, encoded)
+            @test HDF5Vectors2.decode_batch(
+                schema,
+                HDF5Vectors2.read_encoded_batch(store, 1:2),
+            ) == [Int64[1, 2], Int64[3]]
 
             # Repeated stop positions are the natural representation of empty encoded
             # values. They remain distinct logical entries despite consuming no bytes.
@@ -150,10 +130,10 @@ end
                 chunk_length = 4,
             )
             raw_values = [UInt8[], UInt8[1], UInt8[]]
-            HDF5Vectors2.write_encoded_batch!(empty_store, 1, raw_values)
+            HDF5Vectors2.initialize_encoded!(empty_store, raw_values)
             @test read(empty_group["bytes"]) == UInt8[1]
             @test read(empty_group["stops"]) == Int64[0, 1, 1]
-            @test HDF5Vectors2.read_encoded(empty_store, 1:3) == raw_values
+            @test HDF5Vectors2.read_encoded_batch(empty_store, 1:3) == raw_values
 
             # Opening validates both dataset representations and their shared final byte
             # boundary. It does not need to scan every stored stop position.

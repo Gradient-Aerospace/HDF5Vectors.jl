@@ -197,39 +197,21 @@ end
 
 physical_length(store::ScalarStore) = length(store.dataset)
 
-function validate_write_start(store::ScalarStore, start::Int)
-    return validate_fixed_width_write_start(store, start)
-end
-
 ###########################
 # Scalar Store Operations #
 ###########################
 
-function write_encoded!(store::ScalarStore{H}, index::Int, value::H) where {H}
-    current_length = validate_write_start(store, index)
-    if index > current_length
-        HDF5.set_extent_dims(store.dataset, (index,))
-    end
-    store.dataset[index] = value
-    return store
-end
-
-function write_encoded_batch!(
+function initialize_encoded!(
     store::ScalarStore{H},
-    start::Int,
     values::AbstractVector{H},
 ) where {H}
 
-    current_length = validate_write_start(store, start)
     if isempty(values)
         return store
     end
 
-    final_index = start + length(values) - 1
-    if final_index > current_length
-        HDF5.set_extent_dims(store.dataset, (final_index,))
-    end
-    store.dataset[start:final_index] = values
+    HDF5.set_extent_dims(store.dataset, (length(values),))
+    store.dataset[:] = values
     return store
 
 end
@@ -248,15 +230,6 @@ function read_encoded(store::ScalarStore{H}, indices::UnitRange{Int}) where {H}
         throw(BoundsError(store, indices))
     end
     return read(store.dataset, H, indices)
-end
-
-function truncate_store!(store::ScalarStore, count::Int)
-    current_length = physical_length(store)
-    if count < 0 || count > current_length
-        throw(BoundsError(0:current_length, count))
-    end
-    HDF5.set_extent_dims(store.dataset, (count,))
-    return store
 end
 
 stored_value_type(::ScalarStore{H}) where {H} = H

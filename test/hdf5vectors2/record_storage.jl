@@ -38,12 +38,12 @@ end
             data_group = HDF5.create_group(vector_group, "data")
             store = HDF5Vectors2.create_store(data_group, schema; chunk_length = 2)
 
-            first_encoded = encode_value(schema, first(values))
-            remaining_encoded = [
-                encode_value(schema, value) for value in values[2:end]
+            initial_encoded = [
+                encode_value(schema, value) for value in values[1:(end - 1)]
             ]
-            HDF5Vectors2.write_encoded!(store, 1, first_encoded)
-            HDF5Vectors2.write_encoded_batch!(store, 2, remaining_encoded)
+            HDF5Vectors2.initialize_encoded!(store, initial_encoded)
+            final_encoded = encode_value(schema, last(values))
+            HDF5Vectors2.append_encoded!(store, length(values), final_encoded)
 
             @test HDF5Vectors2.physical_length(store) == length(values)
             @test decode_value(schema, HDF5Vectors2.read_encoded(store, 1)) == first(values)
@@ -60,7 +60,7 @@ end
                 schema;
                 chunk_length = 2,
             )
-            HDF5Vectors2.write_encoded_batch!(batch_store, 1, batch)
+            HDF5Vectors2.initialize_encoded!(batch_store, batch)
             stored_batch = HDF5Vectors2.read_encoded_batch(
                 batch_store,
                 1:length(values),
@@ -90,8 +90,11 @@ end
             loaded_schema = read_schema(vector_group)
             loaded_store = HDF5Vectors2.open_store(data_group, loaded_schema)
             @test HDF5Vectors2.physical_length(loaded_store) == length(values)
-            loaded = HDF5Vectors2.read_encoded(loaded_store, 1:length(values))
-            @test [decode_value(loaded_schema, value) for value in loaded] == values
+            loaded = HDF5Vectors2.read_encoded_batch(
+                loaded_store,
+                1:length(values),
+            )
+            @test HDF5Vectors2.decode_batch(loaded_schema, loaded) == values
 
         end
 
@@ -134,7 +137,7 @@ end
                 )
 
                 encoded = [encode_value(schema, value) for value in values]
-                HDF5Vectors2.write_encoded_batch!(store, 1, encoded)
+                HDF5Vectors2.initialize_encoded!(store, encoded)
 
                 loaded_schema = read_schema(vector_group)
                 loaded_store = HDF5Vectors2.open_store(data_group, loaded_schema)
@@ -163,9 +166,8 @@ end
             data_group = HDF5.create_group(file, "data")
             store = HDF5Vectors2.create_store(data_group, schema; chunk_length = 2)
             encoded = encode_value(schema, value)
-
-            HDF5Vectors2.write_encoded!(store, 1, encoded)
-            HDF5Vectors2.write_encoded_batch!(store, 2, fill(encoded, 2))
+            HDF5Vectors2.initialize_encoded!(store, fill(encoded, 2))
+            HDF5Vectors2.append_encoded!(store, 3, encoded)
             @test isnothing(HDF5Vectors2.physical_length(store))
             @test all(child -> isempty(keys(child)), values(data_group))
 
@@ -178,15 +180,15 @@ end
 
 end
 
-@testset "HDF5Vectors2 record tails and validation" begin
+@testset "HDF5Vectors2 record batch validation" begin
 
     mktempdir() do directory
 
         HDF5.h5open(joinpath(directory, "record_validation.h5"), "w") do file
 
-            # This explicit schema gives one record field a runtime-variable Array shape.
-            # It lets the test verify that recursive preflight reaches every record in a
-            # batch before any child dataset changes.
+            # This explicit schema allows a malformed encoded column batch to be
+            # constructed directly. Recursive preflight must reach every field before any
+            # child dataset changes.
             logical_type = Tuple{Vector{Char}, Int64}
             schema = RecordSchema(
                 logical_type,
@@ -199,19 +201,21 @@ end
             )
             data_group = HDF5.create_group(file, "data")
             store = HDF5Vectors2.create_store(data_group, schema; chunk_length = 2)
+
+            # Row-oriented initialization retains its complete preflight while mutation is
+            # limited to an empty store. A bad dense frame in the second record must not
+            # leave the first or second child initialized.
             valid_value = (Int32[Int('a'), Int('b')], Int64(1))
             invalid_value = (Int32[Int('c')], Int64(2))
-
-            @test_throws DimensionMismatch HDF5Vectors2.write_encoded_batch!(
+            @test_throws DimensionMismatch HDF5Vectors2.initialize_encoded!(
                 store,
-                1,
                 [valid_value, invalid_value],
             )
-            @test HDF5Vectors2.physical_length(store) == 0
+            @test iszero(HDF5Vectors2.physical_length(store))
             @test size(data_group["1/values"]) == (2, 0)
             @test isempty(data_group["2/values"])
 
-            # A malformed column batch is also rejected in full before the first field is
+            # A malformed column batch is rejected in full before the first field is
             # written. Here the dense field contains two records, but the scalar field
             # contains only one despite the batch's declared count of two.
             invalid_batch = HDF5Vectors2.RecordBatch(
@@ -221,18 +225,20 @@ end
                 ),
                 2,
             )
-            @test_throws DimensionMismatch HDF5Vectors2.write_encoded_batch!(
+            @test_throws DimensionMismatch HDF5Vectors2.initialize_encoded!(
                 store,
-                1,
                 invalid_batch,
             )
-            @test HDF5Vectors2.physical_length(store) == 0
+            @test iszero(HDF5Vectors2.physical_length(store))
+            @test size(data_group["1/values"]) == (2, 0)
+            @test isempty(data_group["2/values"])
 
-            HDF5Vectors2.write_encoded_batch!(store, 1, [valid_value, valid_value])
-            HDF5Vectors2.truncate_store!(store, 1)
-            @test HDF5Vectors2.physical_length(store) == 1
-            @test HDF5Vectors2.read_encoded(store, 1) == valid_value
-            @test_throws BoundsError HDF5Vectors2.truncate_store!(store, 2)
+            valid_values = [(['a', 'b'], Int64(1)), (['c', 'd'], Int64(2))]
+            valid_batch = HDF5Vectors2.encode_batch(schema, valid_values)
+            HDF5Vectors2.initialize_encoded!(store, valid_batch)
+            @test HDF5Vectors2.physical_length(store) == 2
+            @test decode_value(schema, HDF5Vectors2.read_encoded(store, 1)) ==
+                first(valid_values)
 
             # A record group must contain exactly one child per schema field.
             missing_child_group = HDF5.create_group(file, "missing_child")

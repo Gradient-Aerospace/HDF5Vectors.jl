@@ -57,12 +57,13 @@ end
                     chunk_length = 2,
                 )
 
-                first_frame = encode_value(schema, first(values))
-                remaining_frames = [
-                    encode_value(schema, value) for value in values[2:end]
+                initial_values = values[1:(end - 1)]
+                initial_frames = [
+                    encode_value(schema, value) for value in initial_values
                 ]
-                HDF5Vectors2.write_encoded!(store, 1, first_frame)
-                HDF5Vectors2.write_encoded_batch!(store, 2, remaining_frames)
+                HDF5Vectors2.initialize_encoded!(store, initial_frames)
+                final_frame = encode_value(schema, last(values))
+                HDF5Vectors2.append_encoded!(store, length(values), final_frame)
 
                 @test HDF5Vectors2.physical_length(store) == length(values)
                 @test size(data_group["values"]) == (schema.dims..., length(values))
@@ -95,20 +96,14 @@ end
 
 end
 
-@testset "HDF5Vectors2 dense tails and validation" begin
+@testset "HDF5Vectors2 dense batch and validation" begin
 
     mktempdir() do directory
 
         HDF5.h5open(joinpath(directory, "dense_validation.h5"), "w") do file
 
-            schema = infer_schema(Vector{Char}; dims = (2,))
-            data_group = HDF5.create_group(file, "data")
-            store = HDF5Vectors2.create_store(data_group, schema; chunk_length = 2)
-            frames = [encode_value(schema, value) for value in [['a', 'b'], ['c', 'd']]]
-            HDF5Vectors2.write_encoded_batch!(store, 1, frames)
-
-            # The optimized public path passes one already-stacked batch to physical
-            # storage. It must use the same layout and checks as the frame-vector fallback.
+            # The public copy path passes one already-stacked batch to physical storage.
+            # Initialization writes that representation directly into an empty dataset.
             direct_schema = infer_schema(StaticArrays.SVector{2, Float64})
             direct_values = [
                 StaticArrays.SVector(1.0, 2.0),
@@ -121,51 +116,36 @@ end
                 chunk_length = 2,
             )
             direct_batch = HDF5Vectors2.encode_batch(direct_schema, direct_values)
-            HDF5Vectors2.write_encoded_batch!(direct_store, 1, direct_batch)
+            HDF5Vectors2.initialize_encoded!(direct_store, direct_batch)
             stored_batch = HDF5Vectors2.read_encoded_batch(direct_store, 1:2)
 
             @test stored_batch == direct_batch
             @test HDF5Vectors2.decode_batch(direct_schema, stored_batch) == direct_values
 
-            # An existing physical tail can be replaced, while a write cannot skip over
-            # the next available position.
-            replacement = encode_value(schema, ['e', 'f'])
-            HDF5Vectors2.write_encoded!(store, 2, replacement)
-            @test decode_value(schema, HDF5Vectors2.read_encoded(store, 2)) == ['e', 'f']
-            @test_throws BoundsError HDF5Vectors2.write_encoded!(store, 4, replacement)
-
-            HDF5Vectors2.truncate_store!(store, 1)
-            @test HDF5Vectors2.physical_length(store) == 1
-            @test_throws BoundsError HDF5Vectors2.read_encoded(store, 2)
-            @test_throws BoundsError HDF5Vectors2.truncate_store!(store, 2)
-
-            # Empty ranges preserve the encoded frame type and do not change storage.
-            empty_frames = Array{Int32, 1}[]
-            HDF5Vectors2.write_encoded_batch!(store, 2, empty_frames)
-            @test HDF5Vectors2.read_encoded(store, 2:1) == empty_frames
-            @test HDF5Vectors2.physical_length(store) == 1
-
+            # An empty initialization preserves the stacked batch shape and leaves the
+            # newly created dataset empty.
+            empty_group = HDF5.create_group(file, "empty_batch")
+            empty_store = HDF5Vectors2.create_store(
+                empty_group,
+                direct_schema;
+                chunk_length = 2,
+            )
             empty_batch = HDF5Vectors2.encode_batch(direct_schema, direct_values[1:0])
             @test size(empty_batch) == (2, 0)
-            HDF5Vectors2.write_encoded_batch!(direct_store, 3, empty_batch)
-            @test size(HDF5Vectors2.read_encoded_batch(direct_store, 3:2)) == (2, 0)
-            @test HDF5Vectors2.physical_length(direct_store) == 2
+            HDF5Vectors2.initialize_encoded!(empty_store, empty_batch)
+            @test size(HDF5Vectors2.read_encoded_batch(empty_store, 1:0)) == (2, 0)
+            @test iszero(HDF5Vectors2.physical_length(empty_store))
 
-            # Dynamic Arrays can have the correct element type and rank but the wrong
-            # dimensions. Single and batch writes reject them before extending storage.
-            wrong_frame = Int32[1, 2, 3]
-            @test_throws DimensionMismatch HDF5Vectors2.write_encoded!(
+            # A malformed stacked batch is rejected before the empty dataset is extended.
+            schema = infer_schema(Vector{Char}; dims = (2,))
+            data_group = HDF5.create_group(file, "data")
+            store = HDF5Vectors2.create_store(data_group, schema; chunk_length = 2)
+            wrong_batch = zeros(Int32, 3, 2)
+            @test_throws DimensionMismatch HDF5Vectors2.initialize_encoded!(
                 store,
-                2,
-                wrong_frame,
+                wrong_batch,
             )
-            @test HDF5Vectors2.physical_length(store) == 1
-            @test_throws DimensionMismatch HDF5Vectors2.write_encoded_batch!(
-                store,
-                2,
-                [replacement, wrong_frame],
-            )
-            @test HDF5Vectors2.physical_length(store) == 1
+            @test iszero(HDF5Vectors2.physical_length(store))
 
             # Reopening detects each independent part of the dense layout contract: rank,
             # fixed leading dimensions, and encoded HDF5 datatype.
