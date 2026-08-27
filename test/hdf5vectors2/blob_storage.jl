@@ -84,7 +84,7 @@ end
             data_group = HDF5.create_group(vector_group, "data")
             store = HDF5Vectors2.create_store(data_group, schema; chunk_length = 8)
 
-            encoded = [encode_value(schema, value) for value in values]
+            encoded = HDF5Vectors2.encode_batch(schema, values)
             HDF5Vectors2.initialize_encoded!(store, encoded)
             @test size(data_group["point/x/values"]) == (2,)
             @test size(data_group["label/values"]) == (2,)
@@ -93,8 +93,11 @@ end
 
             loaded_schema = read_schema(vector_group)
             loaded_store = HDF5Vectors2.open_store(data_group, loaded_schema)
-            loaded = HDF5Vectors2.read_encoded(loaded_store, 1:length(values))
-            @test [decode_value(loaded_schema, value) for value in loaded] == values
+            loaded = HDF5Vectors2.read_encoded_batch(
+                loaded_store,
+                1:length(values),
+            )
+            @test HDF5Vectors2.decode_batch(loaded_schema, loaded) == values
 
         end
 

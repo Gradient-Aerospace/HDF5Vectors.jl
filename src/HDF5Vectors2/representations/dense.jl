@@ -364,46 +364,6 @@ physical_length(store::DenseStore{H, N}) where {H, N} = size(store.dataset, N + 
 dense_colons(::DenseStore{H, N}) where {H, N} = ntuple(_ -> Colon(), N)
 dense_extent(store::DenseStore, count::Int) = (store.dims..., count)
 
-function validate_dense_frame(store::DenseStore, frame::Array)
-    if size(frame) != store.dims
-        throw(DimensionMismatch(
-            "Expected an encoded frame with dimensions $(store.dims), but got " *
-            "$(size(frame)).",
-        ))
-    end
-    return frame
-end
-
-function stack_dense_frames(
-    store::DenseStore{H, N},
-    frames::AbstractVector{<:Array{H, N}},
-) where {H, N}
-
-    # Every frame is checked before allocating or writing the stacked HDF5 representation.
-    # This matters for dynamic Arrays, whose dimensions are not guaranteed by their type.
-    for frame in frames
-        validate_dense_frame(store, frame)
-    end
-
-    stacked = Array{H, N + 1}(undef, (store.dims..., length(frames)))
-    for (index, frame) in enumerate(frames)
-        copyto!(selectdim(stacked, N + 1, index), frame)
-    end
-    return stacked
-
-end
-
-function initialize_encoded!(
-    store::DenseStore{H, N},
-    frames::AbstractVector{<:Array{H, N}},
-) where {H, N}
-
-    # Stacking validates the complete batch before the dataset extent changes.
-    stacked = stack_dense_frames(store, frames)
-    return initialize_encoded!(store, stacked)
-
-end
-
 function initialize_encoded!(
     store::DenseStore{H, N},
     stacked::Array{H, M},
@@ -462,34 +422,6 @@ function read_encoded(store::DenseStore{H, N}, index::Int) where {H, N}
     stacked = read(store.dataset, H, selection...)
     return dropdims(stacked; dims = N + 1)
 
-end
-
-function read_encoded(
-    store::DenseStore{H, N},
-    indices::UnitRange{Int},
-) where {H, N}
-
-    if isempty(indices)
-        return Array{H, N}[]
-    elseif first(indices) < 1 || last(indices) > physical_length(store)
-        throw(BoundsError(store, indices))
-    end
-
-    # The storage layer returns independent frames, matching the scalar store's vector of
-    # encoded values and preventing a decoded mutable Array from aliasing a larger buffer.
-    selection = (dense_colons(store)..., indices)
-    stacked = read(store.dataset, H, selection...)
-    return [Array(selectdim(stacked, N + 1, index)) for index in 1:length(indices)]
-
-end
-
-stored_value_type(::DenseStore{H, N}) where {H, N} = Array{H, N}
-function validate_encoded(
-    store::DenseStore{H, N},
-    frame::Array{H, N},
-) where {H, N}
-    validate_dense_frame(store, frame)
-    return nothing
 end
 
 function validate_encoded_batch(

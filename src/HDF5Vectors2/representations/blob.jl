@@ -260,8 +260,6 @@ function read_encoded(store::BlobStore, indices::UnitRange{Int})
 
 end
 
-stored_value_type(::BlobStore) = Vector{UInt8}
-validate_encoded(::BlobStore, ::Vector{UInt8}) = nothing
 function validate_encoded_batch(
     ::BlobStore,
     values::AbstractVector{<:Vector{UInt8}},

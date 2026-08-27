@@ -374,33 +374,6 @@ end
 # Record Store Operations #
 ###########################
 
-# The encoded value type is a property of physical storage. It lets record batches build
-# concretely typed child columns without consulting a logical schema or running a codec.
-function stored_value_type(store::RecordStore)
-    child_types = map(stored_value_type, store.children)
-    return Core.apply_type(Tuple, child_types...)
-end
-
-function validate_record_value(store::RecordStore, value::Tuple)
-
-    child_count = length(store.children)
-    if length(value) != child_count
-        throw(ArgumentError(
-            "Encoded record data has $(length(value)) fields instead of $child_count.",
-        ))
-    end
-
-    for index in eachindex(store.children)
-        validate_encoded(store.children[index], value[index])
-    end
-    return value
-
-end
-function validate_encoded(store::RecordStore, value::Tuple)
-    validate_record_value(store, value)
-    return nothing
-end
-
 # Record batches arrive with one recursively encoded column per child store. This complete
 # preflight happens before the first child changes, so a malformed later column cannot
 # leave earlier columns initialized while later ones remain empty.
@@ -430,29 +403,6 @@ function validate_encoded_batch(
         )
     end
     return nothing
-
-end
-
-function initialize_encoded!(
-    store::RecordStore,
-    values::AbstractVector{<:Tuple},
-)
-
-    # Preflighting the complete batch keeps a bad value in a later record from leaving
-    # earlier columns initialized while later columns remain empty.
-    for value in values
-        validate_record_value(store, value)
-    end
-
-    for child_index in eachindex(store.children)
-        child = store.children[child_index]
-        child_values = Vector{stored_value_type(child)}(undef, length(values))
-        for value_index in eachindex(values)
-            child_values[value_index] = values[value_index][child_index]
-        end
-        initialize_encoded!(child, child_values)
-    end
-    return store
 
 end
 
@@ -488,26 +438,6 @@ function read_encoded(store::RecordStore, index::Int)
         throw(BoundsError(store, index))
     end
     return map(child -> read_encoded(child, index), store.children)
-
-end
-
-function read_encoded(store::RecordStore, indices::UnitRange{Int})
-
-    record_length = physical_length(store)
-    if isnothing(record_length)
-        if !isempty(indices) && first(indices) < 1
-            throw(BoundsError(1:typemax(Int), indices))
-        end
-    elseif !isempty(indices) && (first(indices) < 1 || last(indices) > record_length)
-        throw(BoundsError(store, indices))
-    end
-
-    child_columns = map(child -> read_encoded(child, indices), store.children)
-    values = Vector{stored_value_type(store)}(undef, length(indices))
-    for value_index in eachindex(values)
-        values[value_index] = map(column -> column[value_index], child_columns)
-    end
-    return values
 
 end
 

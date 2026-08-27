@@ -115,8 +115,6 @@ function open_store(group::HDF5.Group, ::ConstantSchema)
 end
 
 physical_length(::ConstantStore) = nothing
-stored_value_type(::ConstantStore) = Nothing
-validate_encoded(::ConstantStore, ::Nothing) = nothing
 function validate_encoded_batch(
     ::ConstantStore,
     values::AbstractVector{Nothing},

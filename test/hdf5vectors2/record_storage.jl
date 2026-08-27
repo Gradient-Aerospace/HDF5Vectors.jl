@@ -38,17 +38,15 @@ end
             data_group = HDF5.create_group(vector_group, "data")
             store = HDF5Vectors2.create_store(data_group, schema; chunk_length = 2)
 
-            initial_encoded = [
-                encode_value(schema, value) for value in values[1:(end - 1)]
-            ]
-            HDF5Vectors2.initialize_encoded!(store, initial_encoded)
+            initial_batch = HDF5Vectors2.encode_batch(schema, values[1:(end - 1)])
+            HDF5Vectors2.initialize_encoded!(store, initial_batch)
             final_encoded = encode_value(schema, last(values))
             HDF5Vectors2.append_encoded!(store, length(values), final_encoded)
 
             @test HDF5Vectors2.physical_length(store) == length(values)
             @test decode_value(schema, HDF5Vectors2.read_encoded(store, 1)) == first(values)
-            encoded = HDF5Vectors2.read_encoded(store, 1:length(values))
-            @test [decode_value(schema, value) for value in encoded] == values
+            encoded = HDF5Vectors2.read_encoded_batch(store, 1:length(values))
+            @test HDF5Vectors2.decode_batch(schema, encoded) == values
 
             # The optimized path preserves columns throughout bulk encoding, storage, and
             # decoding. The nested point is itself a record batch, and the tuple field is
@@ -136,13 +134,16 @@ end
                     chunk_length = 2,
                 )
 
-                encoded = [encode_value(schema, value) for value in values]
+                encoded = HDF5Vectors2.encode_batch(schema, values)
                 HDF5Vectors2.initialize_encoded!(store, encoded)
 
                 loaded_schema = read_schema(vector_group)
                 loaded_store = HDF5Vectors2.open_store(data_group, loaded_schema)
-                loaded = HDF5Vectors2.read_encoded(loaded_store, 1:length(values))
-                @test [decode_value(loaded_schema, value) for value in loaded] == values
+                loaded = HDF5Vectors2.read_encoded_batch(
+                    loaded_store,
+                    1:length(values),
+                )
+                @test HDF5Vectors2.decode_batch(loaded_schema, loaded) == values
 
             end
 
@@ -165,14 +166,15 @@ end
             schema = infer_schema(typeof(value))
             data_group = HDF5.create_group(file, "data")
             store = HDF5Vectors2.create_store(data_group, schema; chunk_length = 2)
+            initial_batch = HDF5Vectors2.encode_batch(schema, fill(value, 2))
+            HDF5Vectors2.initialize_encoded!(store, initial_batch)
             encoded = encode_value(schema, value)
-            HDF5Vectors2.initialize_encoded!(store, fill(encoded, 2))
             HDF5Vectors2.append_encoded!(store, 3, encoded)
             @test isnothing(HDF5Vectors2.physical_length(store))
             @test all(child -> isempty(keys(child)), values(data_group))
 
-            loaded = HDF5Vectors2.read_encoded(store, 1:3)
-            @test [decode_value(schema, item) for item in loaded] == fill(value, 3)
+            loaded = HDF5Vectors2.read_encoded_batch(store, 1:3)
+            @test HDF5Vectors2.decode_batch(schema, loaded) == fill(value, 3)
 
         end
 
@@ -201,19 +203,6 @@ end
             )
             data_group = HDF5.create_group(file, "data")
             store = HDF5Vectors2.create_store(data_group, schema; chunk_length = 2)
-
-            # Row-oriented initialization retains its complete preflight while mutation is
-            # limited to an empty store. A bad dense frame in the second record must not
-            # leave the first or second child initialized.
-            valid_value = (Int32[Int('a'), Int('b')], Int64(1))
-            invalid_value = (Int32[Int('c')], Int64(2))
-            @test_throws DimensionMismatch HDF5Vectors2.initialize_encoded!(
-                store,
-                [valid_value, invalid_value],
-            )
-            @test iszero(HDF5Vectors2.physical_length(store))
-            @test size(data_group["1/values"]) == (2, 0)
-            @test isempty(data_group["2/values"])
 
             # A malformed column batch is rejected in full before the first field is
             # written. Here the dense field contains two records, but the scalar field

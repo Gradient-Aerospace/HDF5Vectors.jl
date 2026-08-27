@@ -58,10 +58,8 @@ end
                 )
 
                 initial_values = values[1:(end - 1)]
-                initial_frames = [
-                    encode_value(schema, value) for value in initial_values
-                ]
-                HDF5Vectors2.initialize_encoded!(store, initial_frames)
+                initial_batch = HDF5Vectors2.encode_batch(schema, initial_values)
+                HDF5Vectors2.initialize_encoded!(store, initial_batch)
                 final_frame = encode_value(schema, last(values))
                 HDF5Vectors2.append_encoded!(store, length(values), final_frame)
 
@@ -74,8 +72,8 @@ end
 
                 first_encoded = HDF5Vectors2.read_encoded(store, 1)
                 @test decode_value(schema, first_encoded) == first(values)
-                encoded = HDF5Vectors2.read_encoded(store, 1:length(values))
-                @test [decode_value(schema, frame) for frame in encoded] == values
+                encoded = HDF5Vectors2.read_encoded_batch(store, 1:length(values))
+                @test HDF5Vectors2.decode_batch(schema, encoded) == values
 
                 # Reopening obtains dimensions and codecs from stored metadata, then checks
                 # that the physical dataset is the representation those tags describe.

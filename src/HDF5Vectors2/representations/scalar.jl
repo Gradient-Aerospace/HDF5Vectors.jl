@@ -232,8 +232,6 @@ function read_encoded(store::ScalarStore{H}, indices::UnitRange{Int}) where {H}
     return read(store.dataset, H, indices)
 end
 
-stored_value_type(::ScalarStore{H}) where {H} = H
-validate_encoded(::ScalarStore{H}, ::H) where {H} = nothing
 function validate_encoded_batch(
     ::ScalarStore{H},
     values::AbstractVector{H},
