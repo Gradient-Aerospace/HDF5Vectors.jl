@@ -12,6 +12,10 @@ abstract type AbstractStore end
 # calls pass the next logical index to `append_encoded!`. Stores do not provide replacement,
 # arbitrary-position batch writes, or truncation because the public vector is append-only.
 
+# Read methods likewise receive indices that `HDF5Vector` has already checked against its
+# logical count. Individual stores preserve the encoded shape of empty ranges, but they do
+# not repeat ordinary bounds checks—especially at every level of a recursive record.
+
 function validate_chunk_length(chunk_length)
     if !(chunk_length isa Integer) || chunk_length isa Bool || chunk_length <= 0
         throw(ArgumentError(

@@ -399,8 +399,6 @@ function read_encoded_batch(
 
     if isempty(indices)
         return Array{H, N + 1}(undef, dense_extent(store, 0))
-    elseif first(indices) < 1 || last(indices) > physical_length(store)
-        throw(BoundsError(store, indices))
     end
 
     # The dataset already stores a dense batch in the representation consumed by the
@@ -411,10 +409,6 @@ function read_encoded_batch(
 end
 
 function read_encoded(store::DenseStore{H, N}, index::Int) where {H, N}
-
-    if index < 1 || index > physical_length(store)
-        throw(BoundsError(store, index))
-    end
 
     # Reading a one-element range preserves the final dimension. Dropping it explicitly
     # then returns an N-dimensional Array even for the unusual zero-dimensional case.

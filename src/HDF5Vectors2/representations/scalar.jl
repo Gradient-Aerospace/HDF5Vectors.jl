@@ -217,17 +217,12 @@ function initialize_encoded!(
 end
 
 function read_encoded(store::ScalarStore{H}, index::Int) where {H}
-    if index < 1 || index > physical_length(store)
-        throw(BoundsError(store, index))
-    end
     return read(store.dataset, H, index)
 end
 
 function read_encoded(store::ScalarStore{H}, indices::UnitRange{Int}) where {H}
     if isempty(indices)
         return H[]
-    elseif first(indices) < 1 || last(indices) > physical_length(store)
-        throw(BoundsError(store, indices))
     end
     return read(store.dataset, H, indices)
 end

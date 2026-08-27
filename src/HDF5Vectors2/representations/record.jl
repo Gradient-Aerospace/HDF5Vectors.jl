@@ -428,29 +428,10 @@ function initialize_encoded!(
 end
 
 function read_encoded(store::RecordStore, index::Int)
-
-    record_length = physical_length(store)
-    if isnothing(record_length)
-        if index < 1
-            throw(BoundsError(1:typemax(Int), index))
-        end
-    elseif index < 1 || index > record_length
-        throw(BoundsError(store, index))
-    end
     return map(child -> read_encoded(child, index), store.children)
-
 end
 
 function read_encoded_batch(store::RecordStore, indices::UnitRange{Int})
-
-    record_length = physical_length(store)
-    if isnothing(record_length)
-        if !isempty(indices) && first(indices) < 1
-            throw(BoundsError(1:typemax(Int), indices))
-        end
-    elseif !isempty(indices) && (first(indices) < 1 || last(indices) > record_length)
-        throw(BoundsError(store, indices))
-    end
 
     # Child stores retain their natural batch shapes. The schema layer consumes these
     # columns recursively and constructs only the final logical record vector.

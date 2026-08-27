@@ -216,10 +216,6 @@ end
 
 function read_encoded(store::BlobStore, index::Int)
 
-    if index < 1 || index > physical_length(store)
-        throw(BoundsError(store, index))
-    end
-
     initial_stop = blob_end_offset(store, index - 1)
     final_stop = blob_end_offset(store, index)
     validate_blob_offsets(store, initial_stop, (final_stop,))
@@ -234,8 +230,6 @@ function read_encoded(store::BlobStore, indices::UnitRange{Int})
 
     if isempty(indices)
         return Vector{UInt8}[]
-    elseif first(indices) < 1 || last(indices) > physical_length(store)
-        throw(BoundsError(store, indices))
     end
 
     initial_stop = blob_end_offset(store, first(indices) - 1)

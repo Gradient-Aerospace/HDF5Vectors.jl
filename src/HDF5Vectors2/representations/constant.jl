@@ -136,17 +136,9 @@ function initialize_encoded!(
     return store
 end
 
-function read_encoded(::ConstantStore, index::Int)
-    if index < 1
-        throw(BoundsError(1:typemax(Int), index))
-    end
-    return nothing
-end
+read_encoded(::ConstantStore, ::Int) = nothing
 
 function read_encoded(::ConstantStore, indices::UnitRange{Int})
-    if !isempty(indices) && first(indices) < 1
-        throw(BoundsError(1:typemax(Int), indices))
-    end
     return fill(nothing, length(indices))
 end
 

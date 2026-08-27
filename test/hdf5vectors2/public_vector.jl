@@ -30,6 +30,14 @@ function test_public_hdf5_vector(
     @test identity.(vector) == source
     @test read(file[name * "/metadata/count"]) == length(source)
 
+    # Logical bounds belong to HDF5Vector rather than its recursively nested physical
+    # stores. Running these checks for every representation ensures an invalid request is
+    # rejected before scalar, dense, record, blob, or constant storage receives it.
+    @test_throws BoundsError vector[0]
+    @test_throws BoundsError vector[length(vector) + 1]
+    @test_throws BoundsError vector[0:0]
+    @test_throws BoundsError vector[(length(vector) + 1):(length(vector) + 1)]
+
     if !isempty(source)
         @test vector[1] == first(source)
         @test vector[end] == last(source)
