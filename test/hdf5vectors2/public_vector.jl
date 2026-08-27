@@ -80,6 +80,11 @@ end
                 ("scalars", Float64[1.0, 2.0, 3.0], (;)),
                 ("chars", collect("abc"), (;)),
                 (
+                    "application_codecs",
+                    [PrototypeGrade("A"), PrototypeGrade("B")],
+                    (;),
+                ),
+                (
                     "dense_arrays",
                     [[1.0, 2.0], [3.0, 4.0]],
                     (; dims = (2,)),
@@ -105,6 +110,7 @@ end
             for (name, source, kwargs) in cases
                 test_public_hdf5_vector(file, name, source; kwargs...)
             end
+            @test read(file["application_codecs/data/values"]) == UInt8['A', 'B']
 
             # Empty copies still need a concrete encoded batch type. Exercising every
             # schema shape here prevents empty records or blobs from degrading to an

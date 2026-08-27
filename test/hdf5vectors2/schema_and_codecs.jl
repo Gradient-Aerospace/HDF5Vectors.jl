@@ -36,6 +36,32 @@ struct PrototypeConcreteValue <: PrototypeAbstractValue
     value::Int64
 end
 
+# This application codec is intentionally defined using only the public extension
+# interface. It is reused at the root of a vector and recursively inside a record, and its
+# schema must survive ordinary untyped loading without any package-owned codec registry.
+struct PrototypeGrade
+    label::String
+end
+
+struct PrototypeGradeCodec <: AbstractCodec{PrototypeGrade, UInt8} end
+
+function HDF5Vectors2.encode_value(::PrototypeGradeCodec, grade::PrototypeGrade)
+    return UInt8(only(grade.label))
+end
+
+function HDF5Vectors2.decode_value(::PrototypeGradeCodec, value::UInt8)
+    return PrototypeGrade(string(Char(value)))
+end
+
+function HDF5Vectors2.infer_schema(::Type{PrototypeGrade}; kwargs...)
+    return ScalarSchema(PrototypeGradeCodec())
+end
+
+struct PrototypeGradedValue
+    grade::PrototypeGrade
+    value::Float64
+end
+
 function test_schema_round_trip(schema, value)
     encoded = encode_value(schema, value)
     @test decode_value(schema, encoded) == value
@@ -69,6 +95,13 @@ end
         float_values = Float64[1.0, 2.0, 3.0]
         @test HDF5Vectors2.encode_batch(float_schema, float_values) === float_values
         @test HDF5Vectors2.decode_batch(float_schema, float_values) === float_values
+
+        # An application codec reaches the same scalar representation through public
+        # dispatch. HDF5Vectors does not need a codec-name method or a matching reader.
+        grade_schema = infer_schema(PrototypeGrade)
+        @test grade_schema isa ScalarSchema
+        @test encoded_type(grade_schema) === UInt8
+        test_schema_round_trip(grade_schema, PrototypeGrade("A"))
 
     end
 
@@ -143,6 +176,7 @@ end
         # blob schema by default because its dimensions are not part of its declared type.
         point_schema = infer_schema(PrototypePoint)
         sample_schema = infer_schema(PrototypeSample)
+        graded_schema = infer_schema(PrototypeGradedValue)
 
         @test point_schema isa RecordSchema
         @test point_schema.names == ("x", "y")
@@ -151,6 +185,8 @@ end
         @test sample_schema.children[1] isa RecordSchema
         @test sample_schema.children[2] isa ScalarSchema
         @test sample_schema.children[3] isa BlobSchema
+        @test graded_schema.children[1] isa ScalarSchema
+        @test graded_schema.children[1].codec isa PrototypeGradeCodec
 
         # Physical record columns use these names as HDF5 path components. Rejecting names
         # that are ambiguous or unsafe keeps the stored layout readable without requiring
@@ -258,6 +294,13 @@ end
             policy = strict_nonconcrete,
         )
         @test_throws ArgumentError infer_schema(Float16)
+
+        # Policy switches are semantic choices rather than integer flags. Rejecting values
+        # that Bool could convert prevents a mistyped option from silently changing the
+        # stored representation.
+        @test_throws ArgumentError SchemaPolicy(; portable = 1)
+        @test_throws ArgumentError SchemaPolicy(; serialize_arrays = 0)
+        @test_throws ArgumentError SchemaPolicy(; serialize_nonconcrete = :yes)
 
     end
 

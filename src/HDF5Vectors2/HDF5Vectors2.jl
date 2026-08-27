@@ -17,7 +17,7 @@ export IdentityCodec, CharCodec, SymbolCodec, EnumCodec, SerializationCodec
 export StructCodec, TupleCodec, NamedTupleCodec, StaticArrayCodec, ConstantCodec
 export SchemaPolicy, infer_schema, serialization_schema
 export logical_type, encoded_type, encode_value, decode_value
-export write_schema, read_schema
+export codec_identifier, schema_identifier, write_schema, read_schema
 export HDF5Vector, create_hdf5_vector, load_hdf5_vector, copy_to_hdf5_vector
 
 end # module HDF5Vectors2

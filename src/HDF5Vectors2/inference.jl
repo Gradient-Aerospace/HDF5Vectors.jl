@@ -34,7 +34,18 @@ function SchemaPolicy(;
     serialize_arrays = true,
     serialize_nonconcrete = true,
 )
+
+    for (name, value) in (
+        ("portable", portable),
+        ("serialize_arrays", serialize_arrays),
+        ("serialize_nonconcrete", serialize_nonconcrete),
+    )
+        if !(value isa Bool)
+            throw(ArgumentError("The $name option must be Bool; got $(repr(value))."))
+        end
+    end
     return SchemaPolicy(portable, serialize_arrays, serialize_nonconcrete)
+
 end
 
 struct SchemaContext{D}
@@ -74,13 +85,41 @@ end
 
 Builds a complete storage schema without opening or modifying an HDF5 file. The result is
 the representation plan used by later creation, writing, and loading operations.
+
+Applications can extend this function for a logical type and return a schema composed from
+the built-in physical representations. Recursive inference always returns through this
+public method, so the extension applies equally to a root vector, a record field, or a
+dense element type.
+
+For example, a `Grade` stored as one `UInt8` needs only a codec and this selection method:
+
+```julia
+struct GradeCodec <: HDF5Vectors2.AbstractCodec{Grade, UInt8} end
+
+HDF5Vectors2.infer_schema(::Type{Grade}; kwargs...) =
+    HDF5Vectors2.ScalarSchema(GradeCodec())
+```
+
+The codec implements [`encode_value`](@ref) and [`decode_value`](@ref). Its concrete type is
+stored with the schema, so no package-owned codec-name registry is needed when loading.
 """
 function infer_schema(
     type::Type;
     dims = nothing,
     policy = SchemaPolicy(),
 )
-    return infer_schema(type, SchemaContext(policy, dims))
+    return infer_builtin_schema(type, SchemaContext(policy, dims))
+end
+
+# Recursive inference deliberately returns through the public, one-argument interface.
+# This permits a codec selected for an application type to work in exactly the same way at
+# the root of a vector, in a record field, or as the element codec of dense storage.
+function infer_child_schema(type::Type, context::SchemaContext)
+    return infer_schema(
+        type;
+        dims = context.dims,
+        policy = context.policy,
+    )
 end
 
 """
@@ -92,41 +131,52 @@ function serialization_schema(::Type{T}) where {T}
     return BlobSchema(SerializationCodec{T}())
 end
 
-function infer_schema(type::Type{<:hdf5_scalar_types}, context::SchemaContext)
+function infer_builtin_schema(type::Type{<:hdf5_scalar_types}, context::SchemaContext)
     reject_dims(type, context.dims)
     return ScalarSchema(IdentityCodec{type}())
 end
 
-function infer_schema(::Type{String}, context::SchemaContext)
+function infer_builtin_schema(::Type{String}, context::SchemaContext)
     reject_dims(String, context.dims)
     return ScalarSchema(IdentityCodec{String}())
 end
 
-function infer_schema(::Type{Char}, context::SchemaContext)
+function infer_builtin_schema(::Type{Char}, context::SchemaContext)
     reject_dims(Char, context.dims)
     return ScalarSchema(CharCodec())
 end
 
-function infer_schema(::Type{Symbol}, context::SchemaContext)
+function infer_builtin_schema(::Type{Symbol}, context::SchemaContext)
     reject_dims(Symbol, context.dims)
     return ScalarSchema(SymbolCodec())
 end
 
-function infer_schema(type::Type{T}, context::SchemaContext) where {H, T <: Enum{H}}
+function infer_builtin_schema(
+    type::Type{T},
+    context::SchemaContext,
+) where {H <: hdf5_scalar_types, T <: Enum{H}}
     reject_dims(type, context.dims)
-    if !(H <: hdf5_scalar_types)
-        return unsupported_schema(type, "its enum base type $H is not HDF5-native.")
-    end
     return ScalarSchema(EnumCodec{T, H}())
 end
 
-function infer_schema(::Type{Tuple{}}, context::SchemaContext)
+function infer_builtin_schema(
+    type::Type{T},
+    context::SchemaContext,
+) where {H, T <: Enum{H}}
+    reject_dims(type, context.dims)
+    return unsupported_schema(type, "its enum base type $H is not HDF5-native.")
+end
+
+function infer_builtin_schema(::Type{Tuple{}}, context::SchemaContext)
     reject_dims(Tuple{}, context.dims)
     value = ()
     return ConstantSchema(ConstantCodec{Tuple{}}(value))
 end
 
-function infer_schema(type::Type{NTuple{N, E}}, context::SchemaContext) where {N, E}
+function infer_builtin_schema(
+    type::Type{NTuple{N, E}},
+    context::SchemaContext,
+) where {N, E}
 
     dims = isnothing(context.dims) ? (N,) : validate_dims(context.dims, 1)
     if dims != (N,)
@@ -136,7 +186,7 @@ function infer_schema(type::Type{NTuple{N, E}}, context::SchemaContext) where {N
     end
 
     child_context = SchemaContext(context.policy, nothing)
-    element_schema = infer_schema(E, child_context)
+    element_schema = infer_child_schema(E, child_context)
     if element_schema isa ScalarSchema
         return DenseSchema(type, dims, element_schema.codec)
     end
@@ -144,7 +194,10 @@ function infer_schema(type::Type{NTuple{N, E}}, context::SchemaContext) where {N
 
 end
 
-function infer_schema(type::Type{<:StaticArrays.StaticArray}, context::SchemaContext)
+function infer_builtin_schema(
+    type::Type{<:StaticArrays.StaticArray},
+    context::SchemaContext,
+)
 
     expected_dims = Tuple(StaticArrays.Size(type))
     dims = isnothing(context.dims) ? expected_dims : validate_dims(
@@ -161,7 +214,7 @@ function infer_schema(type::Type{<:StaticArrays.StaticArray}, context::SchemaCon
     end
 
     child_context = SchemaContext(context.policy, nothing)
-    element_schema = infer_schema(eltype(type), child_context)
+    element_schema = infer_child_schema(eltype(type), child_context)
     if element_schema isa ScalarSchema
         return DenseSchema(type, dims, element_schema.codec)
     end
@@ -169,7 +222,10 @@ function infer_schema(type::Type{<:StaticArrays.StaticArray}, context::SchemaCon
 
 end
 
-function infer_schema(type::Type{<:Array{E, N}}, context::SchemaContext) where {E, N}
+function infer_builtin_schema(
+    type::Type{<:Array{E, N}},
+    context::SchemaContext,
+) where {E, N}
 
     dims = validate_dims(context.dims, N)
     if isnothing(dims)
@@ -180,7 +236,7 @@ function infer_schema(type::Type{<:Array{E, N}}, context::SchemaContext) where {
     end
 
     child_context = SchemaContext(context.policy, nothing)
-    element_schema = infer_schema(E, child_context)
+    element_schema = infer_child_schema(E, child_context)
     if element_schema isa ScalarSchema
         return DenseSchema(type, dims, element_schema.codec)
     elseif context.policy.serialize_arrays
@@ -190,7 +246,7 @@ function infer_schema(type::Type{<:Array{E, N}}, context::SchemaContext) where {
 
 end
 
-function infer_schema(type::Type, context::SchemaContext)
+function infer_builtin_schema(type::Type, context::SchemaContext)
 
     reject_dims(type, context.dims)
 
@@ -248,19 +304,23 @@ function record_schema(type::Type, context::SchemaContext)
     names = Tuple(string(field_name) for field_name in field_names)
     types = fieldtypes(type)
     children = Tuple(
-        infer_schema(field_type, SchemaContext(context.policy, nothing))
+        infer_child_schema(field_type, SchemaContext(context.policy, nothing))
         for field_type in types
     )
 
-    codec = if type <: NamedTuple
-        NamedTupleCodec{type}()
-    elseif type <: Tuple
-        TupleCodec{type}()
-    elseif type <: StaticArrays.StaticArray
-        StaticArrayCodec{type}()
-    else
-        StructCodec{type, length(field_names)}(field_names)
-    end
+    codec = record_codec(type)
     return RecordSchema(type, names, codec, children)
 
+end
+
+record_codec(::Type{T}) where {T <: NamedTuple} = NamedTupleCodec{T}()
+record_codec(::Type{T}) where {T <: Tuple} = TupleCodec{T}()
+
+function record_codec(::Type{T}) where {T <: StaticArrays.StaticArray}
+    return StaticArrayCodec{T}()
+end
+
+function record_codec(::Type{T}) where {T}
+    names = fieldnames(T)
+    return StructCodec{T, length(names)}(names)
 end

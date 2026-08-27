@@ -161,18 +161,7 @@ function decode_value(
     for index in eachindex(encoded)
         decoded[index] = decode_value(schema.element_codec, encoded[index])
     end
-
-    if T <: Tuple
-        value = Tuple(decoded)
-        if !(value isa T)
-            throw(ArgumentError("Decoded dense tuple does not have the declared type $T."))
-        end
-        return value
-    elseif T <: StaticArrays.StaticArray
-        return T(decoded)
-    else
-        return decoded::T
-    end
+    return reconstruct_dense_value(T, decoded)
 
 end
 
@@ -185,20 +174,34 @@ function decode_value(
     # dynamic Array read is already the required type, while tuples and static arrays can
     # copy directly into their inline representations without an intermediate Array.
     validate_dense_encoding(schema, encoded)
-    if T <: Tuple
-        value = Tuple(encoded)
-        if !(value isa T)
-            throw(ArgumentError("Decoded dense tuple does not have the declared type $T."))
-        end
-        return value
-    elseif T <: StaticArrays.StaticArray
-        return T(encoded)
-    elseif encoded isa T
-        return encoded
-    else
-        return Array(encoded)::T
-    end
+    return reconstruct_dense_value(T, encoded)
 
+end
+
+# Dense reconstruction is a property of the logical container type. Keeping that choice
+# behind dispatch permits another fixed-size container to reuse DenseSchema without adding
+# a branch to its implementation.
+function reconstruct_dense_value(::Type{T}, values) where {T <: Tuple}
+    value = Tuple(values)
+    if !(value isa T)
+        throw(ArgumentError("Decoded dense tuple does not have the declared type $T."))
+    end
+    return value
+end
+
+function reconstruct_dense_value(
+    ::Type{T},
+    values,
+) where {T <: StaticArrays.StaticArray}
+    return T(values)
+end
+
+function reconstruct_dense_value(::Type{T}, values::T) where {T <: Array}
+    return values
+end
+
+function reconstruct_dense_value(::Type{T}, values::AbstractArray) where {T <: Array}
+    return Array(values)::T
 end
 
 function decompose_record(schema::RecordSchema{T, N}, value::T) where {T, N}

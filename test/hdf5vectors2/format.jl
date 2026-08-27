@@ -13,6 +13,7 @@
                 ("char", infer_schema(Char), 'λ'),
                 ("symbol", infer_schema(Symbol), :ready),
                 ("enum", infer_schema(PrototypeUInt8Enum), prototype_max),
+                ("application_codec", infer_schema(PrototypeGrade), PrototypeGrade("A")),
                 ("tuple", infer_schema(NTuple{2, Char}), ('a', 'b')),
                 (
                     "static_array",
@@ -62,6 +63,18 @@
             @test read(metadata["schema/field_names"]) == ["x", "y"]
             @test read(metadata["schema/children/1/kind"]) == "scalar"
             @test read(metadata["schema/children/1/encoded_type"]) == "Float64"
+
+            # Codec metadata is descriptive rather than a package-owned reconstruction
+            # registry. The serialized schema and the public typed-inference path both
+            # recover this application codec without HDF5Vectors knowing its identifier.
+            application_metadata = file["application_codec/metadata"]
+            @test read(application_metadata["schema/codec"]) ==
+                HDF5Vectors2.codec_identifier(PrototypeGradeCodec())
+            @test read_schema(file["application_codec"]).codec isa PrototypeGradeCodec
+            @test read_schema(
+                file["application_codec"],
+                PrototypeGrade,
+            ).codec isa PrototypeGradeCodec
 
             # Loading follows the stored representation, not the current default policy.
             # The two groups have the same logical type but retain different schemas.

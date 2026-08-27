@@ -113,7 +113,14 @@ function create_hdf5_vector(
         serialize_nonconcrete,
     )
     schema = infer_schema(type; dims, policy)
-    return create_hdf5_vector(group, name, schema; chunk_length)
+    inference_options = (; dims, policy)
+    return create_hdf5_vector_from_schema(
+        group,
+        name,
+        schema;
+        chunk_length,
+        inference_options,
+    )
 
 end
 
@@ -133,11 +140,27 @@ function create_hdf5_vector(
     schema::AbstractSchema;
     chunk_length = 1000,
 )
+    return create_hdf5_vector_from_schema(
+        group,
+        name,
+        schema;
+        chunk_length,
+        inference_options = nothing,
+    )
+end
+
+function create_hdf5_vector_from_schema(
+    group::HDF5.Group,
+    name::AbstractString,
+    schema::AbstractSchema;
+    chunk_length,
+    inference_options,
+)
 
     name = validate_destination(group, name)
     chunk_length = validate_chunk_length(chunk_length)
     vector_group = HDF5.create_group(group, name)
-    write_schema(vector_group, schema)
+    write_schema(vector_group, schema; inference_options)
     metadata_group = vector_group["metadata"]
     metadata_group["count"] = Int64(0)
     count_dataset = metadata_group["count"]
@@ -273,7 +296,13 @@ function copy_to_hdf5_vector(
     schema = infer_schema(T; dims, policy)
     encoded = encode_batch(schema, collection)
 
-    vector = create_hdf5_vector(group, name, schema; chunk_length)
+    vector = create_hdf5_vector_from_schema(
+        group,
+        name,
+        schema;
+        chunk_length,
+        inference_options = (; dims, policy),
+    )
     write_encoded_batch!(vector.store, 1, encoded)
     persist_count!(vector, length(collection))
     return vector

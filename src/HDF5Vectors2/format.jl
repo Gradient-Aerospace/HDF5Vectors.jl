@@ -5,15 +5,11 @@
 const format_name = "HDF5Vectors2"
 const format_version = Int64(1)
 
-# Every HDF5Vectors2 group has one metadata child. Its format name and version identify the
-# reader needed for the group, while its recursive schema describes the representation that
-# was actually selected. Human-readable type names make the layout inspectable outside
-# Julia. Serialized top-level type metadata is only a convenience for Julia callers that do
-# not supply the logical type explicitly.
-#
-# Within schema metadata, record child schemas use numeric names so their order remains
-# explicit. The corresponding field names are stored as ordinary string data on the schema
-# node and are used as the meaningful paths of physical record fields under `data`.
+# Schema metadata has two complementary forms. The ordinary HDF5 tree describes every
+# physical representation for people and non-Julia readers. A Julia-serialized schema
+# reconstructs the exact codec objects without requiring HDF5Vectors itself to know every
+# application codec type. Typed loading can instead repeat public schema inference and
+# validate the result against the ordinary tree.
 
 function serialize_metadata_value(value)
     io = IOBuffer()
@@ -26,20 +22,96 @@ function deserialize_metadata_value(bytes::Vector{UInt8})
 end
 
 """
+    schema_identifier(schema::AbstractSchema)
+    codec_identifier(codec)
+
+Returns the stable, human-readable identifier stored for a schema or codec implementation.
+The defaults use the implementation type. An application can specialize these functions
+when it needs an identifier that remains stable across a type rename.
+"""
+function implementation_identifier(value)
+    type = typeof(value)
+    return string(parentmodule(type), ".", nameof(type))
+end
+
+schema_identifier(schema::AbstractSchema) = implementation_identifier(schema)
+codec_identifier(codec) = implementation_identifier(codec)
+
+function write_inference_options(metadata_group::HDF5.Group, options)
+
+    metadata_group["schema_was_inferred"] = !isnothing(options)
+    if isnothing(options)
+        return nothing
+    end
+
+    metadata_group["dimensions_were_declared"] = !isnothing(options.dims)
+    metadata_group["dimensions"] = if isnothing(options.dims)
+        Int64[]
+    else
+        Int64[options.dims...,]
+    end
+    metadata_group["portable"] = options.policy.portable
+    metadata_group["serialize_arrays"] = options.policy.serialize_arrays
+    metadata_group["serialize_nonconcrete"] = options.policy.serialize_nonconcrete
+    return nothing
+
+end
+
+function read_stored_bool(group::HDF5.Group, name::AbstractString)
+    value = read(group[name])
+    if !(value isa Bool)
+        throw(ArgumentError("Stored schema option $name must be Bool; got $value."))
+    end
+    return value
+end
+
+function read_inference_options(metadata_group::HDF5.Group)
+
+    if !read_stored_bool(metadata_group, "schema_was_inferred")
+        return nothing
+    end
+
+    dimensions_were_declared = read_stored_bool(
+        metadata_group,
+        "dimensions_were_declared",
+    )
+    dims = if dimensions_were_declared
+        Tuple(Int(dimension) for dimension in read(metadata_group["dimensions"]))
+    else
+        nothing
+    end
+    policy = SchemaPolicy(;
+        portable = read_stored_bool(metadata_group, "portable"),
+        serialize_arrays = read_stored_bool(metadata_group, "serialize_arrays"),
+        serialize_nonconcrete = read_stored_bool(
+            metadata_group,
+            "serialize_nonconcrete",
+        ),
+    )
+    return (; dims, policy)
+
+end
+
+"""
     write_schema(group::HDF5.Group, schema::AbstractSchema)
 
-Writes the versioned logical type and complete storage schema into a new `metadata` child of
-`group`. The schema records the selected representation directly, so loading does not need
-to repeat schema inference or recover the original creation policy.
+Writes the versioned logical type and complete storage schema into a new `metadata` child
+of `group`. Custom schema and codec implementations are serialized as ordinary Julia
+metadata and also describe themselves through the extensible schema-node interface.
 """
-function write_schema(group::HDF5.Group, schema::AbstractSchema)
+function write_schema(
+    group::HDF5.Group,
+    schema::AbstractSchema;
+    inference_options = nothing,
+)
 
     type = logical_type(schema)
     metadata_group = HDF5.create_group(group, "metadata")
     metadata_group["format_name"] = format_name
     metadata_group["format_version"] = format_version
     metadata_group["logical_type"] = string(type)
-    metadata_group["serialized_logical_type"] = serialize_metadata_value(type)
+    metadata_group["serialized_schema"] = serialize_metadata_value(schema)
+    write_inference_options(metadata_group, inference_options)
 
     schema_group = HDF5.create_group(metadata_group, "schema")
     write_schema_node(schema_group, schema)
@@ -47,34 +119,64 @@ function write_schema(group::HDF5.Group, schema::AbstractSchema)
 
 end
 
+
 """
     read_schema(group::HDF5.Group)
     read_schema(group::HDF5.Group, type::Type)
+    read_schema(group::HDF5.Group, schema::AbstractSchema)
 
-Reads the exact schema stored by [`write_schema`](@ref). The first form recovers the logical
-type from Julia-serialized metadata. The explicit-type form avoids deserializing that type
-and verifies the supplied type against the human-readable metadata.
+Reads and validates the exact schema stored by [`write_schema`](@ref). Untyped loading
+deserializes the stored schema, allowing application-defined codecs to reconstruct without
+a package-owned registry. Typed loading repeats public schema inference when the vector was
+created from a type. Supplying an explicit schema avoids metadata deserialization entirely.
 """
 function read_schema(group::HDF5.Group)
+
     metadata_group = group["metadata"]
     validate_format(metadata_group)
-    bytes = Vector{UInt8}(read(metadata_group["serialized_logical_type"]))
-    type = deserialize_metadata_value(bytes)
-    if !(type isa Type)
+    bytes = Vector{UInt8}(read(metadata_group["serialized_schema"]))
+    schema = deserialize_metadata_value(bytes)
+    if !(schema isa AbstractSchema)
         throw(ArgumentError(
-            "Stored logical-type metadata produced a value of type $(typeof(type)).",
+            "Stored schema metadata produced a value of type $(typeof(schema)).",
         ))
     end
-    validate_type_name(metadata_group, type)
-    return read_schema_node(metadata_group["schema"], type)
+    validate_type_name(metadata_group, logical_type(schema))
+    return read_schema(group, schema)
+
 end
 
 function read_schema(group::HDF5.Group, type::Type)
+
     metadata_group = group["metadata"]
     validate_format(metadata_group)
     validate_type_name(metadata_group, type)
-    return read_schema_node(metadata_group["schema"], type)
+    options = read_inference_options(metadata_group)
+    if isnothing(options)
+        bytes = Vector{UInt8}(read(metadata_group["serialized_schema"]))
+        schema = deserialize_metadata_value(bytes)
+        if !(schema isa AbstractSchema{type})
+            throw(ArgumentError(
+                "Stored schema metadata does not describe the requested type $type.",
+            ))
+        end
+    else
+        schema = infer_schema(type; options...)
+    end
+    return read_schema(group, schema)
+
 end
+
+function read_schema(group::HDF5.Group, schema::AbstractSchema)
+
+    metadata_group = group["metadata"]
+    validate_format(metadata_group)
+    validate_type_name(metadata_group, logical_type(schema))
+    validate_schema_node(metadata_group["schema"], schema)
+    return schema
+
+end
+
 
 function validate_format(metadata_group::HDF5.Group)
 
@@ -110,11 +212,16 @@ end
 read_string(group::HDF5.Group, name::AbstractString) = String(read(group[name]))
 
 ########################
-# Writing Schema Nodes #
+# Schema Node Protocol #
 ########################
+
+# Every schema implementation writes and validates its own ordinary HDF5 description.
+# These methods are the complete format-side interface for a new schema. Built-in schema
+# implementations below intentionally use the same dispatch points available to packages.
 
 function write_common_schema(group::HDF5.Group, kind, schema)
     group["kind"] = kind
+    group["schema"] = schema_identifier(schema)
     group["logical_type"] = string(logical_type(schema))
     return nothing
 end
@@ -124,183 +231,42 @@ function write_encoded_type(group::HDF5.Group, schema)
     return nothing
 end
 
-codec_name(::IdentityCodec) = "identity"
-codec_name(::CharCodec) = "char_int32"
-codec_name(::SymbolCodec) = "symbol_string"
-codec_name(::EnumCodec) = "enum"
-codec_name(::SerializationCodec) = "julia_serialization"
-codec_name(::ConstantCodec) = "constant"
+function validate_common_schema(group::HDF5.Group, kind, schema)
 
-record_codec_name(::StructCodec) = "struct"
-record_codec_name(::TupleCodec) = "tuple"
-record_codec_name(::NamedTupleCodec) = "named_tuple"
-record_codec_name(::StaticArrayCodec) = "static_array"
-
-function write_schema_node(group::HDF5.Group, schema::ScalarSchema)
-    write_common_schema(group, "scalar", schema)
-    write_encoded_type(group, schema)
-    group["codec"] = codec_name(schema.codec)
-    return nothing
-end
-
-function write_schema_node(group::HDF5.Group, schema::DenseSchema)
-    write_common_schema(group, "dense", schema)
-    write_encoded_type(group, schema)
-    group["codec"] = codec_name(schema.element_codec)
-    group["dimensions"] = Int64[schema.dims...,]
-    return nothing
-end
-
-function write_schema_node(group::HDF5.Group, schema::RecordSchema)
-
-    write_common_schema(group, "record", schema)
-    group["codec"] = record_codec_name(schema.codec)
-    group["field_names"] = collect(schema.names)
-
-    children_group = HDF5.create_group(group, "children")
-    for (index, child) in enumerate(schema.children)
-        child_group = HDF5.create_group(children_group, string(index))
-        write_schema_node(child_group, child)
-    end
-    return nothing
-
-end
-
-function write_schema_node(group::HDF5.Group, schema::BlobSchema)
-    write_common_schema(group, "blob", schema)
-    group["codec"] = codec_name(schema.codec)
-    return nothing
-end
-
-function write_schema_node(group::HDF5.Group, schema::ConstantSchema)
-    write_common_schema(group, "constant", schema)
-    group["codec"] = codec_name(schema.codec)
-    group["serialized_value"] = serialize_metadata_value(schema.codec.value)
-    return nothing
-end
-
-########################
-# Reading Schema Nodes #
-########################
-
-function read_schema_node(group::HDF5.Group, type::Type)
-    validate_type_name(group, type)
-    kind = read_string(group, "kind")
-    if kind == "scalar"
-        return read_scalar_schema(group, type)
-    elseif kind == "dense"
-        return read_dense_schema(group, type)
-    elseif kind == "record"
-        return read_record_schema(group, type)
-    elseif kind == "blob"
-        return read_blob_schema(group, type)
-    elseif kind == "constant"
-        return read_constant_schema(group, type)
-    end
-    throw(ArgumentError("The stored schema kind $kind is not supported."))
-end
-
-function read_scalar_schema(group::HDF5.Group, type::Type)
-    codec = read_scalar_codec(read_string(group, "codec"), type)
-    schema = ScalarSchema(codec)
-    validate_encoded_type(group, schema)
-    return schema
-end
-
-function read_dense_schema(group::HDF5.Group, type::Type)
-
-    dims = Tuple(Int(dimension) for dimension in read(group["dimensions"]))
-    validate_stored_dense_dims(type, dims)
-    element_type = eltype(type)
-    codec = read_scalar_codec(read_string(group, "codec"), element_type)
-    schema = DenseSchema(type, dims, codec)
-    validate_encoded_type(group, schema)
-    return schema
-
-end
-
-function read_record_schema(group::HDF5.Group, type::Type)
-
-    stored_names = Tuple(String(name) for name in read(group["field_names"]))
-    expected_names = Tuple(string(name) for name in fieldnames(type))
-    if stored_names != expected_names
+    validate_type_name(group, logical_type(schema))
+    stored_kind = read_string(group, "kind")
+    if stored_kind != kind
         throw(ArgumentError(
-            "Stored record fields $stored_names do not match $type fields $expected_names.",
+            "The stored schema kind is $stored_kind, but $kind was selected.",
         ))
     end
 
-    codec = read_record_codec(read_string(group, "codec"), type)
-    field_types = fieldtypes(type)
-    children_group = group["children"]
-    stored_children = Set(String(name) for name in keys(children_group))
-    expected_children = Set(string(index) for index in eachindex(field_types))
-    if stored_children != expected_children
+    stored_schema = read_string(group, "schema")
+    expected_schema = schema_identifier(schema)
+    if stored_schema != expected_schema
         throw(ArgumentError(
-            "Stored record children $stored_children do not match $expected_children.",
+            "The stored schema implementation is $stored_schema, but " *
+            "$expected_schema was selected.",
         ))
     end
-
-    children = ntuple(
-        index -> read_schema_node(children_group[string(index)], field_types[index]),
-        length(field_types),
-    )
-    return RecordSchema(type, stored_names, codec, children)
+    return nothing
 
 end
 
-function read_blob_schema(group::HDF5.Group, type::Type)
-    codec = read_string(group, "codec")
-    if codec != "julia_serialization"
-        throw(ArgumentError("The stored blob codec $codec is not supported."))
-    end
-    return BlobSchema(SerializationCodec{type}())
+function write_codec(group::HDF5.Group, codec)
+    group["codec"] = codec_identifier(codec)
+    return nothing
 end
 
-function read_constant_schema(group::HDF5.Group, type::Type)
-
-    codec = read_string(group, "codec")
-    if codec != "constant"
-        throw(ArgumentError("The stored constant codec $codec is not supported."))
-    end
-
-    bytes = Vector{UInt8}(read(group["serialized_value"]))
-    value = deserialize_metadata_value(bytes)
-    if !(value isa type)
+function validate_codec(group::HDF5.Group, codec)
+    stored_codec = read_string(group, "codec")
+    expected_codec = codec_identifier(codec)
+    if stored_codec != expected_codec
         throw(ArgumentError(
-            "The stored constant for $type produced a value of type $(typeof(value)).",
+            "The stored codec is $stored_codec, but $expected_codec was selected.",
         ))
     end
-    return ConstantSchema(ConstantCodec{type}(value))
-
-end
-
-function read_scalar_codec(name::String, type::Type)
-    if name == "identity"
-        return IdentityCodec{type}()
-    elseif name == "char_int32" && type === Char
-        return CharCodec()
-    elseif name == "symbol_string" && type === Symbol
-        return SymbolCodec()
-    elseif name == "enum" && type <: Enum
-        return enum_codec(type)
-    end
-    throw(ArgumentError("The stored scalar codec $name is not valid for $type."))
-end
-
-enum_codec(::Type{T}) where {H, T <: Enum{H}} = EnumCodec{T, H}()
-
-function read_record_codec(name::String, type::Type)
-    if name == "named_tuple" && type <: NamedTuple
-        return NamedTupleCodec{type}()
-    elseif name == "tuple" && type <: Tuple
-        return TupleCodec{type}()
-    elseif name == "static_array" && type <: StaticArrays.StaticArray
-        return StaticArrayCodec{type}()
-    elseif name == "struct" && !(type <: Tuple) && !(type <: StaticArrays.StaticArray)
-        names = fieldnames(type)
-        return StructCodec{type, length(names)}(names)
-    end
-    throw(ArgumentError("The stored record codec $name is not valid for $type."))
+    return nothing
 end
 
 function validate_encoded_type(group::HDF5.Group, schema)
@@ -314,32 +280,119 @@ function validate_encoded_type(group::HDF5.Group, schema)
     return nothing
 end
 
-function validate_stored_dense_dims(type::Type, dims::Tuple)
+function write_schema_node(group::HDF5.Group, schema::ScalarSchema)
+    write_common_schema(group, "scalar", schema)
+    write_encoded_type(group, schema)
+    write_codec(group, schema.codec)
+    return nothing
+end
 
-    if !all(dimension -> dimension > 0, dims)
-        throw(ArgumentError("Stored dense dimensions must be positive; got $dims."))
-    elseif type <: Tuple
-        expected_dims = (fieldcount(type),)
-    elseif type <: StaticArrays.StaticArray
-        expected_dims = Tuple(StaticArrays.Size(type))
-    elseif type <: Array
-        expected_rank = ndims(type)
-        if length(dims) != expected_rank
-            throw(DimensionMismatch(
-                "Stored dimensions $dims do not have the $expected_rank dimensions " *
-                "of $type.",
-            ))
-        end
-        return nothing
-    else
-        throw(ArgumentError("The stored dense schema cannot represent $type."))
-    end
+function validate_schema_node(group::HDF5.Group, schema::ScalarSchema)
+    validate_common_schema(group, "scalar", schema)
+    validate_encoded_type(group, schema)
+    validate_codec(group, schema.codec)
+    return schema
+end
 
-    if dims != expected_dims
+function write_schema_node(group::HDF5.Group, schema::DenseSchema)
+    write_common_schema(group, "dense", schema)
+    write_encoded_type(group, schema)
+    write_codec(group, schema.element_codec)
+    group["dimensions"] = Int64[schema.dims...,]
+    return nothing
+end
+
+function validate_schema_node(group::HDF5.Group, schema::DenseSchema)
+
+    validate_common_schema(group, "dense", schema)
+    validate_encoded_type(group, schema)
+    validate_codec(group, schema.element_codec)
+    stored_dims = Tuple(Int(dimension) for dimension in read(group["dimensions"]))
+    if stored_dims != schema.dims
         throw(DimensionMismatch(
-            "Stored dimensions $dims do not match the $type dimensions $expected_dims.",
+            "Stored dimensions $stored_dims do not match selected dimensions " *
+            "$(schema.dims).",
         ))
     end
+    return schema
+
+end
+
+function write_schema_node(group::HDF5.Group, schema::RecordSchema)
+
+    write_common_schema(group, "record", schema)
+    write_codec(group, schema.codec)
+    group["field_names"] = collect(schema.names)
+
+    children_group = HDF5.create_group(group, "children")
+    for (index, child) in enumerate(schema.children)
+        child_group = HDF5.create_group(children_group, string(index))
+        write_schema_node(child_group, child)
+    end
     return nothing
+
+end
+
+function validate_schema_node(group::HDF5.Group, schema::RecordSchema)
+
+    validate_common_schema(group, "record", schema)
+    validate_codec(group, schema.codec)
+    stored_names = Tuple(String(name) for name in read(group["field_names"]))
+    if stored_names != schema.names
+        throw(ArgumentError(
+            "Stored record fields $stored_names do not match selected fields " *
+            "$(schema.names).",
+        ))
+    end
+
+    children_group = group["children"]
+    stored_children = Set(String(name) for name in keys(children_group))
+    expected_children = Set(string(index) for index in eachindex(schema.children))
+    if stored_children != expected_children
+        throw(ArgumentError(
+            "Stored record children $stored_children do not match $expected_children.",
+        ))
+    end
+    for index in eachindex(schema.children)
+        validate_schema_node(
+            children_group[string(index)],
+            schema.children[index],
+        )
+    end
+    return schema
+
+end
+
+function write_schema_node(group::HDF5.Group, schema::BlobSchema)
+    write_common_schema(group, "blob", schema)
+    write_codec(group, schema.codec)
+    return nothing
+end
+
+function validate_schema_node(group::HDF5.Group, schema::BlobSchema)
+    validate_common_schema(group, "blob", schema)
+    validate_codec(group, schema.codec)
+    return schema
+end
+
+function write_schema_node(group::HDF5.Group, schema::ConstantSchema)
+    write_common_schema(group, "constant", schema)
+    write_codec(group, schema.codec)
+    group["serialized_value"] = serialize_metadata_value(schema.codec.value)
+    return nothing
+end
+
+function validate_schema_node(group::HDF5.Group, schema::ConstantSchema)
+
+    validate_common_schema(group, "constant", schema)
+    validate_codec(group, schema.codec)
+    bytes = Vector{UInt8}(read(group["serialized_value"]))
+    stored_value = deserialize_metadata_value(bytes)
+    if !isequal(stored_value, schema.codec.value)
+        throw(ArgumentError(
+            "The stored constant does not match the selected constant value.",
+        ))
+    end
+    return schema
 
 end
