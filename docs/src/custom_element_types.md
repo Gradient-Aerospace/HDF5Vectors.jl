@@ -131,7 +131,7 @@ function construct(
 end
 ```
 
-The default composite [`deconstruct`](@ref) method still reads `x` and `y` from the value. A custom `deconstruct` method is needed only when the stored field values must be obtained differently.
+The default composite [`deconstruct`](@ref) method still reads `x` and `y` from the value. A custom `deconstruct` method is needed only when the stored field values must be obtained differently. It returns one value for each declared field, in field order, and HDF5Vectors uses those values consistently for `push!`, `setindex!`, and `copy_to_hdf5_vector`.
 
 ## Keeping Style Selection Reproducible
 
