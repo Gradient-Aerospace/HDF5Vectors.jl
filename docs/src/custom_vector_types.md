@@ -8,12 +8,12 @@ To create a new type of HDF5 vector, define a new storage style type (`<:Abstrac
 
 Then implement the following HDF5Vectors storage hooks:
 
-* `create_hdf5_vector(style::MyNewHDF5VectorStorageStyle, group, name, el_type; kwargs...)`
-* `load_hdf5_vector(style::MyNewHDF5VectorStorageStyle, group_or_dataset, el_type; kwargs...)`
+* `create_hdf5_vector(style::MyNewHDF5VectorStorageStyle, group::HDF5.Group, name::AbstractString, el_type; kwargs...)`
+* `load_hdf5_vector(style::MyNewHDF5VectorStorageStyle, group::HDF5.Group, el_type; kwargs...)`
 
 The generic `copy_to_hdf5_vector` implementation creates the selected vector and calls `push!` for each element. A storage backend may also implement a specialized bulk-copy method when it can do so more efficiently:
 
-* `copy_to_hdf5_vector(style::MyNewHDF5VectorStorageStyle, group, name, collection; kwargs...)`
+* `copy_to_hdf5_vector(style::MyNewHDF5VectorStorageStyle, group::HDF5.Group, name::AbstractString, collection; kwargs...)`
 
 These style-taking methods are implementation hooks. Application code should call `create_hdf5_vector` or `copy_to_hdf5_vector` without passing a style directly.
 

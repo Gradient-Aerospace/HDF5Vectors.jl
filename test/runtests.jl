@@ -30,6 +30,14 @@ function test_collection(
     idxs = 1:min(3, length(source))
     @test arr[idxs] == source[idxs]
     @test arr[collect(idxs)] == source[collect(idxs)]
+
+    # Boolean vectors and BitVectors are logical masks, not collections of integer indices.
+    mask = [isodd(k) for k in eachindex(source)]
+    @test arr[mask] == source[mask]
+    @test arr[BitVector(mask)] == source[BitVector(mask)]
+    @test arr[falses(length(source))] == source[falses(length(source))]
+    @test_throws BoundsError arr[vcat(mask, false)]
+
     @test collect(arr) == source
     @test eltype(arr) == T
     @test map(identity, iterable(arr)) == source
@@ -60,9 +68,9 @@ function test_collection(
     arr3 = load_hdf5_vector(fid[name])
     @test collect(arr3) == source
 
-    # Load again, this time specifying the element type explicitly. We'll need to forward
-    # the same kwargs that we used when creating the vector.
-    arr4 = load_hdf5_vector(fid[name], T; create_kwargs...)
+    # Load again, this time specifying the element type explicitly. The storage options
+    # should still come from the metadata rather than needing to be repeated by the caller.
+    arr4 = load_hdf5_vector(fid[name], T)
     @test collect(arr4) == source
 
     # Now test that we can continue writing to the HDF5 vector.
@@ -109,6 +117,30 @@ end
 HDF5Vectors.storage_style(::Type{MyJSONishType}; kwargs...) = HDF5Vectors.JSONStorageStyle()
 Base.:(==)(a::MyJSONishType, b::MyJSONishType) = a.x == b.x && a.y == b.y && a.z == b.z
 
+struct MyFallibleElementalType
+    value::Int64
+end
+function HDF5Vectors.storage_style(::Type{MyFallibleElementalType}; kwargs...)
+    return HDF5Vectors.ElementalStorageStyle(Int64)
+end
+function HDF5Vectors.construct(
+    ::Type{HDF5Vectors.HDF5VectorOfElementalTypes{MyFallibleElementalType, Int64}},
+    value::Int64,
+)
+    return MyFallibleElementalType(value)
+end
+function HDF5Vectors.deconstruct(
+    ::Type{HDF5Vectors.HDF5VectorOfElementalTypes{MyFallibleElementalType, Int64}},
+    el::MyFallibleElementalType,
+)
+
+    if el.value < 0
+        throw(ArgumentError("MyFallibleElementalType values must be nonnegative."))
+    end
+    return el.value
+
+end
+
 struct MyNoncreteType
     x::NamedTuple
 end
@@ -153,7 +185,9 @@ mkpath("out")
 end
 
 @testset "array types (portable = $portable)" for portable in (true, false)
+
     h5open("$out_dir/array_types.h5", "w") do fid
+
         test_collection(fid, "ntuples_of_ints", [(k, 2k) for k in 1:11])
         test_collection(fid, "svectors_of_floats", [SA_F64[k, 2k, 3k] for k in 1:12])
         test_collection(fid, "smatrices_of_floats", [SA_F64[k 2k; 3k 4k] for k in 1:12])
@@ -164,7 +198,59 @@ end
         test_collection(fid, "matrices_of_floats_no_dims", [Float64[k 2k; 3k 4k] for k in 1:12])
         test_collection(fid, "ntuples_of_symbols", [(:a, :b) for k in 1:3])
         test_collection(fid, "svectors_of_symbols", [SVector{2, Symbol}(:a, :b) for k in 1:2])
+
+        # Array-like storage must apply the scalar representation of transformed elemental
+        # types such as Char and Enum to every element.
+        test_collection(fid, "ntuples_of_chars", [('a', 'b'), ('c', 'd')])
+        test_collection(fid, "svectors_of_enums", [
+            SVector(uint8_zero, uint8_max),
+            SVector(uint8_max, uint8_zero),
+        ])
+        test_collection(fid, "smatrices_of_chars", [
+            SMatrix{2, 2, Char, 4}(('a', 'b', 'c', 'd')),
+            SMatrix{2, 2, Char, 4}(('e', 'f', 'g', 'h')),
+        ])
+        test_collection(fid, "sarrays_of_enums", [
+            SArray{Tuple{2, 1, 2}, UInt8Values, 3, 4}(
+                (uint8_zero, uint8_max, uint8_max, uint8_zero),
+            ),
+            SArray{Tuple{2, 1, 2}, UInt8Values, 3, 4}(
+                (uint8_max, uint8_zero, uint8_zero, uint8_max),
+            ),
+        ])
+        test_collection(
+            fid,
+            "vectors_of_chars",
+            [collect("ab"), collect("cd")];
+            create_kwargs = (; dims = (2,), ),
+        )
+        test_collection(
+            fid,
+            "matrices_of_enums",
+            [
+                reshape(
+                    UInt8Values[uint8_zero, uint8_max, uint8_max, uint8_zero],
+                    2,
+                    2,
+                ),
+                reshape(
+                    UInt8Values[uint8_max, uint8_zero, uint8_zero, uint8_max],
+                    2,
+                    2,
+                ),
+            ];
+            create_kwargs = (; dims = (2, 2), ),
+        )
+
+        @test eltype(read(fid["ntuples_of_chars"]["data"])) === Int32
+        @test eltype(read(fid["svectors_of_enums"]["data"])) === UInt8
+        @test eltype(read(fid["smatrices_of_chars"]["data"])) === Int32
+        @test eltype(read(fid["sarrays_of_enums"]["data"])) === UInt8
+        @test eltype(read(fid["vectors_of_chars"]["data"])) === Int32
+        @test eltype(read(fid["matrices_of_enums"]["data"])) === UInt8
+
     end
+
 end
 
 @testset "singleton types (portable = $portable)" for portable in (true, false)
@@ -330,6 +416,41 @@ end
 
 end
 
+@testset "destination validation" begin
+
+    h5open("$out_dir/destination_validation.h5", "w") do fid
+
+        # The destination must be an HDF5 group, including when writing at the file root.
+        @test_throws MethodError create_hdf5_vector(fid, "file_parent", Int64)
+        @test_throws MethodError copy_to_hdf5_vector(fid, "file_parent", Int64[1])
+        @test !haskey(fid, "file_parent")
+
+        # Destination names must be strings regardless of the selected storage style.
+        cases = (
+            (:elemental_name, Int64, Int64[1]),
+            (:composite_name, MyType, [MyType(1, 2.0)]),
+            (
+                :serialized_name,
+                MySerializingType,
+                [MySerializingType("value", [1.0], MyType(2, 3.0))],
+            ),
+        )
+        for (name, el_type, source) in cases
+            @test_throws MethodError create_hdf5_vector(fid["/"], name, el_type)
+            @test_throws MethodError copy_to_hdf5_vector(fid["/"], name, source)
+            @test !haskey(fid, string(name))
+        end
+
+        # The contract accepts AbstractString implementations rather than only String.
+        full_name = "substring_name_suffix"
+        name = SubString(full_name, 1, 14)
+        copied = copy_to_hdf5_vector(fid["/"], name, Int64[1, 2])
+        @test collect(copied) == [1, 2]
+
+    end
+
+end
+
 @testset "array-like element validation" begin
 
     h5open("$out_dir/arrayish_element_validation.h5", "w") do fid
@@ -351,6 +472,74 @@ end
         @test collect(arr) == [replacement]
         @test_throws HDF5.API.H5Error setindex!(arr, replacement, 2)
         @test collect(arr) == [replacement]
+
+    end
+
+end
+
+@testset "bulk copy preflight" begin
+
+    h5open("$out_dir/bulk_copy_preflight.h5", "w") do fid
+
+        # Elemental conversion must finish before the optimized copy creates its group.
+        # This custom elemental representation deliberately rejects one source value.
+        elemental_source = [
+            MyFallibleElementalType(1),
+            MyFallibleElementalType(-1),
+        ]
+        @test_throws ArgumentError copy_to_hdf5_vector(
+            fid["/"],
+            "invalid_elemental",
+            elemental_source,
+        )
+        @test !haskey(fid, "invalid_elemental")
+
+        # Fixed-shape array storage must likewise validate every element before creating
+        # the destination. The second vector does not have the declared dimensions.
+        array_source = [[1.0, 2.0], [3.0, 4.0, 5.0]]
+        @test_throws DimensionMismatch copy_to_hdf5_vector(
+            fid["/"],
+            "invalid_array",
+            array_source;
+            dims = (2,),
+        )
+        @test !haskey(fid, "invalid_array")
+
+    end
+
+end
+
+@testset "multi-dataset load validation" begin
+
+    h5open("$out_dir/multi_dataset_load_validation.h5", "w") do fid
+
+        # Every field of a composite vector must contain the same number of values.
+        composite_source = [MyType(1, 2.0), MyType(3, 4.0)]
+        copy_to_hdf5_vector(fid["/"], "invalid_composite", composite_source)
+        second_field_dataset = fid["invalid_composite"]["data"]["b"]["data"]
+        HDF5.set_extent_dims(second_field_dataset, (1,))
+        @test_throws DimensionMismatch load_hdf5_vector(fid["invalid_composite"])
+
+        # The final serialized stop must coincide with the end of the byte dataset.
+        serialized_source = [
+            MySerializingType("first", [1.0], MyType(2, 3.0)),
+        ]
+        copy_to_hdf5_vector(fid["/"], "invalid_serialized", serialized_source)
+        serialized_bytes = fid["invalid_serialized"]["data"]["bytes"]["data"]
+        HDF5.set_extent_dims(serialized_bytes, (length(serialized_bytes) + 1,))
+        serialized_bytes[end] = 0x00
+        @test_throws DimensionMismatch load_hdf5_vector(fid["invalid_serialized"])
+
+        # Empty serialized storage must not contain bytes without a corresponding stop.
+        copy_to_hdf5_vector(
+            fid["/"],
+            "invalid_empty_serialized",
+            MySerializingType[],
+        )
+        empty_bytes = fid["invalid_empty_serialized"]["data"]["bytes"]["data"]
+        HDF5.set_extent_dims(empty_bytes, (1,))
+        empty_bytes[1] = 0x00
+        @test_throws DimensionMismatch load_hdf5_vector(fid["invalid_empty_serialized"])
 
     end
 
@@ -399,6 +588,32 @@ end
         ]
         test_collection(fid, "serializing_types", serializing_types)
         test_collection(fid, "json_types", json_types)
+
+        # The optimized serialization copy stores all serialized values in one byte vector
+        # and records the cumulative end position of each value.
+        serialized_values = HDF5Vectors.serialize_to_byte_array.(serializing_types)
+        expected_bytes = reduce(vcat, serialized_values)
+        expected_stops = cumsum(Int64[length(bytes) for bytes in serialized_values])
+        serialized_data_group = fid["serializing_types-copy"]["data"]
+        @test read(serialized_data_group["bytes"]["data"]) == expected_bytes
+        @test read(serialized_data_group["stops"]["data"]) == expected_stops
+
+        # Empty collections must also produce valid, reloadable byte-array storage.
+        empty_copy = copy_to_hdf5_vector(
+            fid["/"],
+            "empty_serializing_types",
+            MySerializingType[],
+        )
+        @test isempty(empty_copy)
+        empty_data_group = fid["empty_serializing_types"]["data"]
+        @test isempty(read(empty_data_group["bytes"]["data"]))
+        @test isempty(read(empty_data_group["stops"]["data"]))
+
+        reloaded_empty_copy = load_hdf5_vector(fid["empty_serializing_types"])
+        @test isempty(reloaded_empty_copy)
+        first_value = MySerializingType("first", [1.0], MyType(2, 3.0))
+        push!(reloaded_empty_copy, first_value)
+        @test collect(reloaded_empty_copy) == [first_value]
 
     end
 
