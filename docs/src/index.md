@@ -67,6 +67,12 @@ String-like types:
 * String
 * Symbol
 
+Singleton types:
+
+* `Nothing`
+* Immutable zero-field marker types with zero-argument constructors
+* Empty tuples, named tuples, and static arrays
+
 Array-like types:
 
 * SVector, SMatrix, and SArray of elemental type
@@ -81,10 +87,16 @@ Composite types:
 
 Serialized types:
 
-* Vector, Matrix, and Array of non-elemental type or where the dimensions are not known in advance
-* Any type that serializes to a JSON string
+* Vector, Matrix, and Array of non-elemental type or whose dimensions are not known in advance
+* Custom types explicitly assigned `ByteArrayStorageStyle` or `JSONStorageStyle`
 
-Serialization provides a fall-back approach for logging to HDF5 when other logging types don't make sense. For instance, any type whose structure may change from element to element (a nonconcrete type) defaults to using serialization for logging. This is slow, but it works. See "Specifying a Storage Type", below, for more.
+Serialization provides a fallback approach for logging to HDF5 when other storage types do not make sense. For instance, a nonconcrete type, whose structure may change from element to element, defaults to serialization. This is slow and is intended only for types selected by the rules above. See "Specifying a Storage Type" below for more.
+
+Primitive types that HDF5.jl does not natively support, including `Float16`, `Int128`, and `UInt128`, are rejected unless the user defines another storage style for them.
+
+## Adding Elements
+
+Values passed to `push!` must already be instances of the HDF5 vector's declared element type; HDF5Vectors does not convert them to that type. Elements stored with array-like storage must also have the dimensions declared when the vector was created.
 
 ## Iteration
 
@@ -97,6 +109,10 @@ arr = create_hdf5_vector(...)
 ```
 
 The reason this is faster is that [`iterable`](@ref) creates a structure intended to take advantage of the way HDF5.jl will access the data.
+
+## Replacing Elements
+
+`setindex!` is available when the storage representation can replace an element in place. Byte-array serialization is append-only and does not support replacement. A composite vector supports `setindex!` only when every field does; otherwise, the operation throws an error before changing any field. Supported composite replacements are not transactional, so an unrecoverable HDF5 error can still leave some fields changed and others unchanged.
 
 ## Loading an Existing Array
 
@@ -124,7 +140,7 @@ These will simply be n-element arrays in the HDF5 file.
 
 When the elements to be stored each have dimensions like (M, N, ...), the HDF5 file will have an array of the appropriate type whose dimensions are (M, N, ..., Z), where Z is the number of elements being stored. This is easy to interpret outside of Julia while also allowing fast access and efficient storage.
 
-When the elements to store are Vector, Matrix, or Array (or any AbstractArray whose dimensions are not known from the type), the `dims = (M, N, ...)` argument must be provided to `create_hdf_vector`. Otherwise, Arrays cannot be generally stored with array-like storage and will instead be serialized to byte arrays, which if far slower and unintepretable outside of Julia.
+When the elements to store are Vector, Matrix, or Array (or any AbstractArray whose dimensions are not known from the type), the `dims = (M, N, ...)` argument must be provided to [`create_hdf5_vector`](@ref) to use array-like storage. Otherwise, arrays cannot generally be stored this way and will instead be serialized to byte arrays, which is far slower and uninterpretable outside Julia.
 
 ### Composite Types
 
@@ -155,6 +171,8 @@ If the HDF5 vector were created in the `/my_group` group with the name `my_type`
 /my_group/my_type/data/b/data/d  # Array of 2-by-100 Float64
 ```
 
+Note that a failed `push!` for a composite type may result in some fields of the composite type having updated values while others do not.
+
 For bits-type structs, a user can specify that they want "non-portable" storage. This means that the HDF5.jl package can define a custom HDF5 type to store the struct, and the resulting HDF5 file will look like this:
 
 ```
@@ -173,7 +191,9 @@ The `JSONStorageStyle` uses the JSON3 package to serialize a given type to a JSO
 
 ## Specifying a Storage Type
 
-Users can specify what "style" of storage should be used for a given type. For instance, suppose we had the following type:
+Users can specify what "style" of storage should be used for a given type. Storage style is a property of the element type and relevant creation options, not an override for one particular vector. The same [`storage_style`](@ref) method is called again when loading the vector, so it must make a consistent selection from those inputs.
+
+For instance, suppose we had the following type:
 
 ```
 @enum ServerStatus unknown up down

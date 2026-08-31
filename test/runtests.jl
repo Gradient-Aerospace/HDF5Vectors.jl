@@ -32,7 +32,6 @@ function test_collection(
     @test arr[collect(idxs)] == source[collect(idxs)]
     @test collect(arr) == source
     @test eltype(arr) == T
-    # @show collect(arr)
     @test map(identity, iterable(arr)) == source
     @test mapreduce(identity, (a, b) -> b, iterable(arr)) == source[end]
     if T <: Real
@@ -76,6 +75,9 @@ end
 
 # Here are some custom things we can work with.
 @enum Birds sparrow hawk sparrowhawk
+@enum UInt8Values::UInt8 uint8_zero = 0 uint8_max = 255
+@enum Int64Values::Int64 int64_low = -3_000_000_000 int64_high = 3_000_000_000
+@enum Int128Values::Int128 int128_value = 1
 @enumx Ungulates deer horse bison
 struct MyType
     a::Int64
@@ -111,7 +113,14 @@ struct MyNoncreteType
     x::NamedTuple
 end
 
-struct MyEmptyType
+struct MySingletonType
+end
+
+struct MySingletonWithoutZeroArgumentConstructor
+    MySingletonWithoutZeroArgumentConstructor(::Nothing) = new()
+end
+
+mutable struct MyMutableZeroFieldType
 end
 
 out_dir = "out"
@@ -122,6 +131,19 @@ mkpath("out")
         test_collection(fid, "ints", collect(1 : 10); native = true)
         test_collection(fid, "floats", collect(1. : 12.); native = true)
         test_collection(fid, "enums", [sparrowhawk, hawk, sparrow])
+        uint8_enums = [uint8_max, uint8_zero, uint8_max]
+        int64_enums = [int64_low, int64_high, int64_low]
+        test_collection(fid, "uint8_enums", uint8_enums)
+        test_collection(fid, "int64_enums", int64_enums)
+
+        # Enums should use their declared base type in HDF5 rather than always using Int32.
+        stored_uint8_enums = read(fid["uint8_enums"]["data"])
+        stored_int64_enums = read(fid["int64_enums"]["data"])
+        @test eltype(stored_uint8_enums) === UInt8
+        @test eltype(stored_int64_enums) === Int64
+        @test stored_uint8_enums == UInt8.(vcat(uint8_enums, uint8_enums))
+        @test stored_int64_enums == Int64.(vcat(int64_enums, int64_enums))
+
         test_collection(fid, "enumxs", [Ungulates.horse, Ungulates.deer, Ungulates.bison, Ungulates.deer, Ungulates.horse, Ungulates.deer])
         test_collection(fid, "chars", collect('a' : 'z'))
         test_collection(fid, "strings", collect("element $k" for k in 1:9); native = true)
@@ -145,14 +167,73 @@ end
     end
 end
 
-@testset "empty types (portable = $portable)" for portable in (true, false)
+@testset "singleton types (portable = $portable)" for portable in (true, false)
+
+    # Singleton vectors store only their length, but they should otherwise support the same
+    # create, push, copy, reload, and append operations as vectors with stored values.
     create_kwargs = (; portable, )
-    h5open("$out_dir/empty_types.h5", "w") do fid
-        test_collection(fid, "empty_ntuples", [Tuple{}() for k in 1:11]; create_kwargs)
-        test_collection(fid, "empty_svectors_of_floats", [SVector{0, Float64}() for k in 1:12]; create_kwargs)
-        test_collection(fid, "empty_types", [MyEmptyType() for _ in 1:10]; create_kwargs)
-        test_collection(fid, "empty_named_tuples", [(;) for _ in 1:10]; create_kwargs)
+    h5open("$out_dir/singleton_types.h5", "w") do fid
+
+        # Exercise built-in singleton containers, including zero-size static arrays whose
+        # shapes still differ at the type level.
+        test_collection(fid, "singleton_ntuples", [Tuple{}() for _ in 1:11]; create_kwargs)
+        test_collection(
+            fid,
+            "singleton_svectors_of_floats",
+            [SVector{0, Float64}() for _ in 1:12];
+            create_kwargs,
+        )
+
+        test_collection(
+            fid,
+            "singleton_smatrices_of_floats",
+            [SMatrix{0, 2, Float64, 0}() for _ in 1:12];
+            create_kwargs,
+        )
+        test_collection(
+            fid,
+            "singleton_sarrays_of_floats",
+            [SArray{Tuple{0, 2, 1}, Float64, 3, 0}() for _ in 1:12];
+            create_kwargs,
+        )
+
+        # Exercise ordinary user-defined and Julia singleton types, including the empty
+        # named tuple whose type does not provide a zero-argument constructor.
+        test_collection(
+            fid,
+            "singleton_types",
+            [MySingletonType() for _ in 1:10];
+            create_kwargs,
+        )
+        test_collection(fid, "singleton_named_tuples", [(;) for _ in 1:10]; create_kwargs)
+        test_collection(fid, "nothings", fill(nothing, 10); create_kwargs)
+        test_collection(fid, "vals", fill(Val(:reset), 10); create_kwargs)
+
     end
+
+end
+
+@testset "unsupported zero-field types" begin
+
+    h5open("$out_dir/unsupported_zero_field_types.h5", "w") do fid
+
+        # Unsupported primitives must not be mistaken for singletons merely because they
+        # have no fields. Likewise, singleton storage must preserve value semantics rather
+        # than silently accepting unreconstructible or mutable zero-field types.
+        unsupported_types = (
+            Float16,
+            Int128,
+            UInt128,
+            Int128Values,
+            MySingletonWithoutZeroArgumentConstructor,
+            MyMutableZeroFieldType,
+        )
+        for type in unsupported_types
+            @test_throws ArgumentError create_hdf5_vector(fid["/"], string(type), type)
+        end
+
+    end
+
 end
 
 @testset "composite types (portable = $portable)" for portable in (true, false)
@@ -183,36 +264,156 @@ end
 
 end
 
-@testset "serialization types" begin
+@testset "in-memory counts follow successful writes" begin
 
-    h5open("$out_dir/serialization_types.h5", "w") do fid
+    h5open("$out_dir/failed_push.h5", "w") do fid
 
-        # Check that the generic copy fallback honors the explicitly selected style.
-        source = collect(1:10)
-        arr = copy_to_hdf5_vector(
-            HDF5Vectors.ByteArrayStorageStyle(),
-            fid["/"],
-            "explicit_byte_array_style",
-            source;
-            portable = true,
-        )
-        @test arr isa HDF5Vectors.HDF5VectorWithByteArrayStorage{Int}
-        @test collect(arr) == source
+        # The declared element type is a strict input contract rather than a conversion
+        # request.
+        arr = create_hdf5_vector(fid["/"], "values", Int64)
+        @test_throws MethodError push!(arr, Int32(1))
+        @test isempty(arr)
 
-        test_collection(fid, "nonconcrete_types", [MyNoncreteType((; k, )) for k in 1:10])
-        test_collection(fid, "serializing_types", [MySerializingType(string(k), [k, 2k, 3k], MyType(4k, 5k)) for k in 1:11])
-        test_collection(fid, "json_types", [MyJSONishType(string(k), [k, 2k, 3k], MyType(4k, 5k)) for k in 1:11])
+        # A closed dataset provides a deterministic HDF5 write failure. The failed push
+        # must not advance the vector's in-memory count.
+        close(arr.dataset)
+        @test_throws ErrorException push!(arr, 1)
+        @test isempty(arr)
 
     end
 
 end
 
-# verify error behaviour for unsupported operations
-@testset "error conditions" begin
-    h5open("$out_dir/error_conditions.h5", "w") do fid
-        # ByteArray style does not support setindex!
-        arr = create_hdf5_vector(fid["/"], "bytes", MySerializingType; portable=true)
-        push!(arr, MySerializingType("x", [1.], MyType(1,2)))
-        @test_throws ErrorException setindex!(arr, MySerializingType("y",[2.],MyType(3,4)), 1)
+@testset "creation option validation" begin
+
+    h5open("$out_dir/creation_option_validation.h5", "w") do fid
+
+        # Invalid chunk lengths should fail before creating an HDF5 group.
+        @test_throws ArgumentError create_hdf5_vector(
+            fid["/"], "zero_chunk", Int64; chunk_length = 0,
+        )
+        @test_throws ArgumentError create_hdf5_vector(
+            fid["/"], "float_chunk", Int64; chunk_length = 2.5,
+        )
+        @test !haskey(fid, "zero_chunk")
+        @test !haskey(fid, "float_chunk")
+
+        # Dynamic arrays require positive integer dimensions with the correct rank.
+        @test_throws DimensionMismatch create_hdf5_vector(
+            fid["/"],
+            "wrong_rank",
+            Vector{Float64};
+            dims = (2, 3),
+        )
+        @test_throws ArgumentError create_hdf5_vector(
+            fid["/"],
+            "float_dims",
+            Vector{Float64};
+            dims = (2.0,),
+        )
+        @test_throws ArgumentError create_hdf5_vector(
+            fid["/"],
+            "zero_dims",
+            Vector{Float64};
+            dims = (0,),
+        )
+
+        # Dimensions supplied for statically sized arrays must match their type.
+        @test_throws DimensionMismatch create_hdf5_vector(
+            fid["/"],
+            "wrong_static_dims",
+            SVector{2, Float64};
+            dims = (3,),
+        )
+
     end
+
+end
+
+@testset "array-like element validation" begin
+
+    h5open("$out_dir/arrayish_element_validation.h5", "w") do fid
+
+        arr = create_hdf5_vector(fid["/"], "vectors", Vector{Float64}; dims = (2,))
+        original = [1.0, 2.0]
+        push!(arr, original)
+
+        # Shape errors must be reported before a push extends the dataset or setindex!
+        # replaces the existing value.
+        @test_throws DimensionMismatch push!(arr, [3.0, 4.0, 5.0])
+        @test length(arr) == 1
+        @test size(arr.dataset) == (2, 1)
+        @test_throws DimensionMismatch setindex!(arr, [3.0, 4.0, 5.0], 1)
+        @test collect(arr) == [original]
+
+        replacement = [6.0, 7.0]
+        arr[1] = replacement
+        @test collect(arr) == [replacement]
+        @test_throws HDF5.API.H5Error setindex!(arr, replacement, 2)
+        @test collect(arr) == [replacement]
+
+    end
+
+end
+
+@testset "setindex! storage support" begin
+
+    h5open("$out_dir/setindex_support.h5", "w") do fid
+
+        # A composite with entirely in-place child storage supports replacement.
+        elemental_composite = create_hdf5_vector(fid["/"], "elemental_composite", MyType)
+        push!(elemental_composite, MyType(1, 2.0))
+        elemental_composite[1] = MyType(3, 4.0)
+        @test collect(elemental_composite) == [MyType(3, 4.0)]
+
+        # This composite's vector field uses append-only byte storage. Reject replacement
+        # before changing its earlier string field.
+        append_only_composite = create_hdf5_vector(
+            fid["/"],
+            "append_only_composite",
+            MyNonBitsType,
+        )
+        original = MyNonBitsType("original", [1, 2])
+        replacement = MyNonBitsType("replacement", [3, 4])
+        push!(append_only_composite, original)
+        @test_throws ArgumentError setindex!(append_only_composite, replacement, 1)
+        @test collect(append_only_composite) == [original]
+
+    end
+
+end
+
+@testset "serialization types" begin
+
+    h5open("$out_dir/serialization_types.h5", "w") do fid
+
+        test_collection(fid, "nonconcrete_types", [MyNoncreteType((; k, )) for k in 1:10])
+
+        # These custom concrete types select their serialization formats through
+        # storage_style, so the same format is selected when copied vectors are reloaded.
+        serializing_types = [
+            MySerializingType(string(k), [k, 2k, 3k], MyType(4k, 5k)) for k in 1:11
+        ]
+        json_types = [
+            MyJSONishType(string(k), [k, 2k, 3k], MyType(4k, 5k)) for k in 1:11
+        ]
+        test_collection(fid, "serializing_types", serializing_types)
+        test_collection(fid, "json_types", json_types)
+
+    end
+
+end
+
+@testset "error conditions" begin
+
+    h5open("$out_dir/error_conditions.h5", "w") do fid
+
+        # ByteArray style does not support setindex!
+        arr = create_hdf5_vector(fid["/"], "bytes", MySerializingType; portable = true)
+        push!(arr, MySerializingType("x", [1.0], MyType(1, 2)))
+        replacement = MySerializingType("y", [2.0], MyType(3, 4))
+        @test_throws ErrorException setindex!(arr, replacement, 1)
+
+    end
+
 end
