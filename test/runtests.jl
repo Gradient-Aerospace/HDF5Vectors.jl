@@ -13,8 +13,6 @@ function test_collection(
     create_kwargs = (;),
 ) where {T}
 
-    println("Testing $name")
-
     # Create the HDF5Vector from the source.
     arr = create_hdf5_vector(fid["/"], name, T; chunk_length, create_kwargs...)
     for el in source

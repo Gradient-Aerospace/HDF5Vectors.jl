@@ -4,64 +4,137 @@
 CurrentModule = HDF5Vectors
 ```
 
-Most types can be stored reasonably well as HDF5 vectors without having to specifying anything about how that should happen. However, sometimes it's desireable to have more control. In that case, it's possible to specify how a custom type should be stored in the HDF5 file, using one of the existing storage styles. The following methods should be implemented for the type:
+Most concrete structs work without customization when their fields have [supported types](supported_types.md). A custom storage rule is needed only when the default field-oriented representation is unsuitable or the type needs a different reconstruction process.
 
-* [`storage_style`](@ref)
-* [`construct`](@ref)
-* [`deconstruct`](@ref)
+## Using the Default Composite Storage
 
-Here's a complete example of a custom type for recording student grades, where the grade itself is stored as a string, where that string is going to be A, B, C, D, or F. Here is the native type:
+This type needs no HDF5Vectors-specific methods:
 
+```julia
+struct Measurement
+    time::Float64
+    name::String
+    values::Vector{Float64}
+end
+
+import HDF5
+using HDF5Vectors
+
+HDF5.h5open("measurements.h5", "w") do file
+    measurements = create_hdf5_vector(file["/"], "measurements", Measurement)
+    push!(measurements, Measurement(0.0, "initial", [1.0, 2.0]))
+end
 ```
+
+The struct is stored field-by-field. Because no `dims` are declared for the `values` field, each `Vector{Float64}` is serialized independently. The other fields remain directly readable as HDF5 datasets. Their paths are described under [Field-Oriented Composite Values](storage_layout.md#Field-Oriented-Composite-Values).
+
+## Selecting Julia Byte Serialization
+
+Only a [`storage_style`](@ref) method is needed to store an entire custom value with Julia's `Serialization` library:
+
+```julia
+struct Snapshot
+    labels::Vector{String}
+    values::Dict{String, Float64}
+end
+
+import HDF5Vectors: storage_style, ByteArrayStorageStyle
+
+storage_style(::Type{Snapshot}; kwargs...) = ByteArrayStorageStyle()
+```
+
+No [`construct`](@ref) or [`deconstruct`](@ref) method is needed because the byte-array backend serializes and deserializes the complete value. This representation is appropriate only when Julia-specific bytes are acceptable.
+
+## Selecting JSON Storage
+
+[`JSONStorageStyle`](@ref) stores one JSON string per element. The calling project needs JSON3 as a dependency, and loading JSON3 makes the HDF5Vectors JSON extension available.
+
+```julia
+import JSON3
+import HDF5Vectors: storage_style, JSONStorageStyle
+
+struct ServerDetails
+    hostname::String
+    active::Bool
+end
+
+storage_style(::Type{ServerDetails}; kwargs...) = JSONStorageStyle()
+```
+
+The type must be supported by `JSON3.write` and `JSON3.read(..., ServerDetails)`. The resulting strings are stored at `/vector_name/data/json/data` and can be read by non-Julia HDF5 and JSON libraries.
+
+## Defining an Elemental Representation
+
+A custom type can reuse the elemental backend by specifying an HDF5 datatype and defining conversions between that stored datatype and the Julia value. In this example, we will store grades as `UInt8` bytes:
+
+```julia
 struct Grade
     label::String
 end
-```
 
-Here's what's necessary to store this as the "elemental" style, where the label is stored as a char (UInt8).
-
-```
 using HDF5Vectors
-import HDF5Vectors: storage_style, construct, deconstruct, ElementalStorageStyle, HDF5VectorOfElementalTypes
+import HDF5Vectors: storage_style, construct, deconstruct
+import HDF5Vectors: ElementalStorageStyle, HDF5VectorOfElementalTypes
 
-# Tell it we want this stored using the "elemental" style, with UInt8 as the element type.
 storage_style(::Type{Grade}; kwargs...) = ElementalStorageStyle(UInt8)
 
-# To store a Grade, pull the first (and only) char from the label string and convert to UInt8.
-deconstruct(::Type{HDF5VectorOfElementalTypes{Grade, UInt8}}, el::Grade) = UInt8(only(el.label))
+function deconstruct(
+    ::Type{HDF5VectorOfElementalTypes{Grade, UInt8}},
+    grade::Grade,
+)
+    return UInt8(only(grade.label))
+end
 
-# To rebuild a Grade from what was stored, make a string from the char.
-construct(::Type{HDF5VectorOfElementalTypes{Grade, UInt8}}, el::UInt8) = Grade(string(Char(el)))
-```
-
-Now let's give that a try:
-
-```
-using HDF5
-h5open("custom_element_type.h5", "w") do fid
-
-    # Create the vector.
-    arr = create_hdf5_vector(fid, "grades", Grade)
-
-    # Add some grades.
-    push!(arr, Grade("A"))
-    push!(arr, Grade("B"))
-    push!(arr, Grade("C"))
-    push!(arr, Grade("D"))
-    push!(arr, Grade("F"))
-
-    # Show how that's stored in the file itself:
-    @show read(fid["grades"]["data"])
-
-    # Show that in fact Grades are rebuilt from that data.
-    @show collect(arr)
-
+function construct(
+    ::Type{HDF5VectorOfElementalTypes{Grade, UInt8}},
+    value::UInt8,
+)
+    return Grade(string(Char(value)))
 end
 ```
 
-The resulting output is what we'd expect:
+`deconstruct` runs before a value is written, and `construct` runs after its stored representation is read. Their first argument identifies the HDF5 vector backend and both the Julia and HDF5 element types.
 
+The type can now be used through the ordinary interface:
+
+```julia
+import HDF5
+
+HDF5.h5open("grades.h5", "w") do file
+    grades = create_hdf5_vector(file["/"], "grades", Grade)
+    push!(grades, Grade("A"))
+    push!(grades, Grade("B"))
+    @show read(file["grades/data"])
+    @show collect(grades)
+end
 ```
-read(fid["grades"]) = UInt8[0x41, 0x42, 0x43, 0x44, 0x46]
-collect(arr) = Grade[Grade("A"), Grade("B"), Grade("C"), Grade("D"), Grade("F")]
+
+## Customizing Composite Reconstruction
+
+Default composite reconstruction calls the declared element type with its stored field values in field order. If that constructor does not exist, a more-specific [`construct`](@ref) method can provide the appropriate reconstruction. For example, this type deliberately accepts one tuple rather than two scalar constructor arguments:
+
+```julia
+struct PointFromTuple
+    x::Float64
+    y::Float64
+
+    PointFromTuple(values::Tuple{Float64, Float64}) = new(values...)
+end
+
+import HDF5Vectors: construct, HDF5VectorOfCompositeTypes
+
+function construct(
+    ::Type{HDF5VectorOfCompositeTypes{PointFromTuple}},
+    values,
+)
+    return PointFromTuple((values[1], values[2]))
+end
 ```
+
+The default composite [`deconstruct`](@ref) method still reads `x` and `y` from the value. A custom `deconstruct` method is needed only when the stored field values must be obtained differently.
+
+## Keeping Style Selection Reproducible
+
+[`storage_style`](@ref) is called when a vector is created and again when it is loaded. Custom methods should make the same choice from the element type and the supplied keyword options every time. Including `kwargs...`, even when a method does not currently use any options, allows it to work with the ordinary interface as shown in the examples above.
+
+The built-in metadata preserves `dims` and `portable`. A custom storage backend can store additional options inside its own HDF5 group, but style selection during loading cannot depend on an option that is unavailable until after the style has been selected.

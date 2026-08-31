@@ -1,17 +1,16 @@
 """
-This module implements an AbstractVector whose underlying data is stored in an HDF5 file.
+This module implements an `AbstractVector` whose underlying data is stored in an HDF5 file.
 
 It generally can store vectors of elements with fixed sizes, where that element is one of:
 
-* HDF5-compatible numeric type (signed/unsigned ints and floats)
+* HDF5-compatible scalar type (booleans, signed/unsigned integers, and floats)
 * Enum
-* SVector, SMatrix, and SArray of numeric types
-* Tuple of numeric types
-* bits-type consisting of any types on this list
-* general composite type consisting of any types on this list
-* Vector, Matrix, and Array of any types on this list, as long as their dimensions are
-  always the same
+* SVector, SMatrix, SArray, and NTuple values with supported element types
+* general composite types with supported fields
+* Vector, Matrix, and Array values with supported element types and declared dimensions
 * String
+* Symbol
+* Char
 * reconstructible singleton types
 
 Further, it can serialize types to bytes or strings and store those in the HDF5 file. This
@@ -21,8 +20,9 @@ allows it to store:
 * Vector, Matrix, and Array values whose dimensions are not declared or vary between
   elements
 
-It fulfills the general AbstractVector interface. Note, however, that iterating directly is
-slow; for far better speed, iterate on `iterable(arr)`.
+It supports common `AbstractVector` operations and can grow via `push!`. Direct iteration
+reads elements individually from HDF5. `iterable(arr)` first loads the full vector into
+memory and is generally faster when the vector fits in RAM.
 """
 module HDF5Vectors
 
@@ -39,18 +39,18 @@ const hdf5_scalar_types = Union{Bool, UInt8, Int8, UInt16, Int16, UInt32, Int32,
 ##################
 
 """
-An abstract type intended as a parent for all HDF5 vector storage styles.
+An abstract type intended as a parent for all HDF5 vector storage styles. Custom backends
+define a subtype and select it with [`storage_style`](@ref).
 """
 abstract type AbstractHDF5VectorStorageStyle end
 
 """
-Used to store "elemental" types -- types that HDF5 can natively understand, including:
+Used when each value can be represented in one HDF5 dataset, including:
 
 * Int8, Int16, Int32, and Int64 (and unsigned forms)
 * Float32 and Float64
-* Enum
-* Char
-* Bits-type structs
+* Enum and Char values represented by HDF5-native integers
+* Bits-type structs when non-portable storage is requested
 * String
 """
 struct ElementalStorageStyle{HT} <: AbstractHDF5VectorStorageStyle
@@ -58,11 +58,12 @@ struct ElementalStorageStyle{HT} <: AbstractHDF5VectorStorageStyle
 end
 
 """
-Used to store composite structured information, like:
+Used to store composite structured information by placing each field in its own HDF5
+vector, including:
 
-* General tuple of types on this list
-* General named tuple of types on this list
-* General struct of types on this list
+* Heterogeneous tuples
+* Named tuples
+* General structs with supported field types
 """
 struct CompositeStorageStyle <: AbstractHDF5VectorStorageStyle end
 
@@ -98,99 +99,44 @@ function unsupported_element_type(el_type, reason)
     ))
 end
 
-# These are the only functions types we have to implement to use ElementalStorageStyle
-# or ArrayStorageStyle
-
 # Types that aren't native HDF5 scalars but that are bits-types can still be stored using
 # the elemental storage type, but that's not portable, so this function considers
 # portability before deciding to store non-native types as elemental or composite.
 
 """
-    storage_style(el_type::Type; kwargs...)
+    storage_style(el_type::Type; dims = nothing, portable = true, kwargs...)
 
-Returns the storage style intended for this type. Available styles include:
+Returns the storage style used for vectors with the declared element type `el_type`.
+Built-in styles include:
 
 * `ElementalStorageStyle` for scalars or non-portable bits-type structs
 * `SingletonStorageStyle` for types that have exactly one possible value
 * `ArrayStorageStyle` for arrays of known, consistent dimensions holding elemental types
-* `CompositeStorageStyle` for general structs
+* `CompositeStorageStyle` for field-oriented structs and heterogeneous tuples
 * `ByteArrayStorageStyle` for Julia serialization
-* `JSONStorageStyle` for serializing types to JSON strings
+* `JSONStorageStyle` for JSON3 serialization
 
-The default storage style for scalars and "non-portable" bits-type structs (more
-below) is `ElementalStorageStyle`. For vectors with known dimensions, `ArrayStorageStyle`
-is the default. Singleton types use `SingletonStorageStyle`. For other structs (either
-non-bits-types or "portable"), the default is `CompositeStorageStyle`. Nonconcrete types and
-arrays without known dimensions default to `ByteArrayStorageStyle`. Unsupported primitive
-types produce an error unless the user explicitly defines another storage style.
+`dims` declares the fixed dimensions of dynamically sized array elements. `portable`
+selects field-oriented storage rather than a native HDF5 datatype for bits-type composite
+elements.
 
-The storage style is selected again from the element type and stored options when a vector
-is loaded. A custom `storage_style` method must therefore make a consistent choice from
-those inputs. The style-taking storage methods are implementation hooks, not per-vector
-overrides for selecting a different representation.
+A more-specific method can select a representation for a custom element type. Style
+selection occurs both when a vector is created and when it is loaded, so a custom method
+must return the same style from the element type and stored options.
 
-Array storage results in HDF5 files where the dataset has the dimensions of each element,
-plus one added dimension. For instance, if each element to be stored is an m-by-n array,
-then the HDF5 file will contain an m-by-n-by-p array, where element `k` is `[:, :, k]`.
-
-Structs can be stored in a "portable" way. For the a struct defined as:
-
-```
-struct MyType
-    a::Int64
-    b::Float64
-end
-```
-
-the resulting HDF5 file would look like so:
-
-```
-/my_group/my_vector/arrays/a # a 1D array of Int64
-/my_group/my_vector/arrays/b # a 1D array of Float64
-```
-
-This format is called "portable" because it is easy to interpret this dataset outside of
-Julia.
-
-"Portability" is controlled by the `portable` keyword argument. When this is false, the
-above struct would be stored as:
-
-```
-/my_group/my_vector # a 1D array of custom type inferred from MyType
-```
-
-This uses the HDF5 type system via the HDF5.jl package to encode the type. The underlying
-data can still be interpreted outside of Julia, but it requires substantially more code to
-interpret the type information in a useful way. If you are _only_ interested in loading
-the HDF5 in Julia, use `portable = false`, and the resulting storage will be faster. (Note
-that non-bits types cannot use the HDF5 type system and hence will always use the portable
-form.)
-
-When the elements to be stored are themselves vectors, matrices, or arrays of known
-dimension, the user should provide those dimensions via the `dims` keyword argument.
-Otherwise, since the dimensions of an array are not known from its type, and it's not known
-if the user _intends_ for dimensions to be consistent over time or not,
-
-Keyword arguments:
-
-* `portable`: When true (the default), composite types like structs will be stored in a
-  slower but more portable way. (For other types, this argument is ignored.)
-* `dims`: Sets the dimensions of Array types (otherwise, ignored), such as (3, 4) when each
-  element is a 3-by-4 matrix.
-
-Users can add a `storage_style` method for their custom types to allow them to express how
-their types out to be stored. E.g., if a type should always be serialized, then this would
-instruct Julia to use serialization to a byte array for the give type:
+For example, this selects Julia byte serialization for `MyType`:
 
 ```
 HDF5Vectors.storage_style(::Type{MyType}; kwargs...) = HDF5Vectors.ByteArrayStorageStyle()
 ```
+
+[Supported Element Types and Creation Options](@ref) and [Custom Element Types](@ref)
+describe the selection rules and provide customization examples.
 """
 function storage_style(el_type::Type; portable = true, kwargs...)
 
-    # The HDF5-native types don't even get here. They have their own storage_style. If we're
-    # here, then we have no other specified storage style to use, and we need to figure out
-    # a safe one.
+    # HDF5-native types have more-specific methods. This fallback selects a safe
+    # representation for other types.
 
     # We can figure out the fields of concrete types.
     if isconcretetype(el_type)
@@ -223,14 +169,13 @@ function storage_style(el_type::Type; portable = true, kwargs...)
 
         elseif isbitstype(el_type) && !portable
 
-            # We can log bits types as elementals, but that's obviously not portable, so
-            # only do this if the user doesn't care to have a portable HDF5 file.
+            # HDF5 can store a bits type as one custom datatype, but the resulting layout is
+            # more difficult to interpret outside Julia.
             return ElementalStorageStyle(el_type)
 
         else
 
-            # If it's not one of those special cases, we can likely log it as a composite
-            # style.
+            # Store other concrete types field-by-field.
             return CompositeStorageStyle()
 
         end
@@ -248,20 +193,20 @@ end
 """
     construct(type::Type, el)
 
-Create the appropriate Julia value from the raw element `el` retrieved from the
+Creates the appropriate Julia value from the raw element `el` retrieved from the
 HDF5 dataset. The behaviour is determined by the storage style associated with `type`.
-This generic definition is a placeholder; concrete storage implementations overload
-`construct` for their particular container types and element representations.
+No generic implementation is provided; storage backends define methods for their
+particular container types and element representations.
 """
 function construct end
 
 """
     deconstruct(type::Type, el)
 
-Convert the Julia value `el` into the representation stored in the HDF5 file. The
-storage style associated with `type` chooses how the conversion is performed. Like
-`construct`, this generic definition is a no-op; storage backends provide concrete
-methods.
+Converts the Julia value `el` into the representation stored in the HDF5 file. The
+storage style associated with `type` chooses how the conversion is performed. No generic
+implementation is provided; storage backends define methods for their particular
+container types and element representations.
 """
 function deconstruct end
 
@@ -270,7 +215,7 @@ function deconstruct end
 ######################
 
 """
-An abstract type intended as the parent for all type of HDF5 vectors. Subtypes should have
+An abstract type intended as the parent for all types of HDF5 vectors. Subtypes should have
 a corresponding storage style and implement [`create_hdf5_vector`](@ref), and at least these
 parts of the AbstractArray interface: `length`, `push!`, `getindex`, and `collect`.
 `setindex!` is optional for storage that supports in-place replacement.
@@ -282,11 +227,16 @@ Base.size(arr::AbstractHDF5Vector) = (length(arr),)
 Base.similar(::AbstractHDF5Vector{T}, ::Type{T}, dims::Dims) where {T} = Vector{T}(undef, dims)
 Base.IndexStyle(::Type{<:AbstractHDF5Vector}) = IndexLinear()
 Base.broadcastable(arr::AbstractHDF5Vector) = collect(arr)
-# Base.BroadcastStyle(::Type{SrcType}) = SrcStyle()
-# Base.similar(bc::Broadcasted{DestStyle}, ::Type{ElType})
 
 # Composite storage checks this before replacing any field, so append-only children can
 # reject the operation before another child is changed.
+"""
+    supports_setindex(vector::AbstractHDF5Vector)
+
+Returns whether `vector` supports replacing existing elements with `setindex!`. The default
+is `false`. A custom backend that implements replacement and can be nested in composite
+storage should define this to return `true`.
+"""
 supports_setindex(::AbstractHDF5Vector) = false
 
 function validate_chunk_length(chunk_length)
@@ -336,12 +286,10 @@ function validate_fixed_dims(dims, expected_dims)
 
 end
 
-# This should take care of operations like `sum` and `mean`.
+# Route reductions through one bulk read rather than scalar HDF5 reads.
 function Base.mapreduce(f, op, arr::AbstractHDF5Vector; kwargs...)
     return mapreduce(f, op, iterable(arr); kwargs...)
 end
-# Some things that don't use mapreduce: findmax/min, argmax/min, any, all, count
-
 # Use the iterable form rather than trying to iterate via getindex.
 Base.map(f, arr::AbstractHDF5Vector) = map(f, iterable(arr))
 
@@ -365,14 +313,12 @@ Base.getindex(arr::AbstractHDF5Vector, ::Colon) = collect(arr)
 
 abstract type AbstractHDF5VectorIterator{T} end
 
-# This loads all of the data up front and then iterates over it, but we could make a
-# different kind of iterator later that loads chunks and reads incrementally.
+# This loads all data up front so iteration does not perform one HDF5 read per element.
 struct HDF5VectorIterator{T} <: AbstractHDF5VectorIterator{T}
-    data::Vector{T} # Implementation detail (not for public consumption)
+    data::Vector{T}
     count::Int64
 end
 
-# This could store what chunk number we're on, etc.
 struct HDF5VectorIteratorState
     index::Int64
 end
@@ -380,9 +326,9 @@ end
 """
     iterable(arr::AbstractHDF5Vector)
 
-Returns an iterable type corresponding to the given HDF5 vector. This is generally much
-faster than iterating on the vector directly. That is, instead of `[f(el) for el in arr]`,
-it is much faster to use `[f(el) for el in iterable(arr)]`.
+Loads `arr` into memory and returns an iterator over the collected values. This is generally
+much faster than reading one element from HDF5 on each iteration, but requires enough memory
+to hold the entire vector.
 """
 iterable(arr::AbstractHDF5Vector) = HDF5VectorIterator(collect(arr), length(arr))
 
@@ -397,39 +343,6 @@ function Base.iterate(itr::HDF5VectorIterator, state = HDF5VectorIteratorState(1
     return (el, HDF5VectorIteratorState(next_data_itr_state))
 end
 
-# If we just let the HDF5Arrays have a cache, then iteration (with a mutable iterator!)
-# works efficiently. But if we don't want to fill up RAM with all of the things we've cached
-# then we'll need to clear the cache, which is an extra step. I'm really not sure we want
-# cache.
-
-# If we want a fallback `iterate` behavior...
-
-# # This allocates like crazy because it's a non-bits-type, so the creation of these
-# # requires allocation. It's not _that_ slow, but iterating on these arrays is the slowest
-# # way to work with them. Iterate over the result of `iterable` instead.
-# struct HDF5ArrayIteratorState{T}
-#     data::Vector{T}
-#     index::Int64
-# end
-# function Base.iterate(arr::HDF5VectorOfHDF5NativeType{T}) where {T}
-#     data = collect(arr)
-#     el, internal_state = iterate(data)
-#     return (el, HDF5ArrayIteratorState{T}(data, internal_state))
-# end
-# function Base.iterate(arr::HDF5VectorOfHDF5NativeType{T}, state::HDF5ArrayIteratorState{T})::Union{Nothing, Tuple{T, HDF5ArrayIteratorState{T}}} where {T}
-#     if state.index > arr.count
-#         return nothing
-#     end
-#     itr_out = iterate(state.data, state.index)
-#     return (itr_out[1], HDF5ArrayIteratorState{T}(state.data, itr_out[2]))
-# end
-
-# I don't think we need these unless the iterator itself is stateful.
-# Base.isdone(arr::HDF5VectorOfHDF5NativeType) = arr.count == 0
-# Base.isdone(::HDF5VectorOfHDF5NativeType, ::Nothing) = true
-# Base.isdone(::HDF5VectorOfHDF5NativeType, state::HDF5ArrayIteratorState) = isdone(state.data, state.index)
-
-# This seems inefficient, but this is used rarely.
 function serialize_to_byte_array(x)
     io = IOBuffer() # Will use UInt8 by default.
     Serialization.serialize(io, x)
@@ -441,11 +354,26 @@ function deserialize_from_byte_array(x)
     return Serialization.deserialize(io)
 end
 
-# function get_storage_dimensions(style::AbstractHDF5VectorStorageStyle)
-#     return ()
-# end
+"""
+    store_metadata(
+        style::AbstractHDF5VectorStorageStyle,
+        group::HDF5.Group,
+        el_type;
+        dims = nothing,
+        portable,
+    )
 
-function store_metadata(style::AbstractHDF5VectorStorageStyle, group, el_type; dims = nothing, portable)
+Stores the common metadata required by `load_hdf5_vector` in a newly created HDF5 vector
+group. This is an implementation hook for custom storage backends; ordinary callers do not
+need to call it.
+"""
+function store_metadata(
+    style::AbstractHDF5VectorStorageStyle,
+    group::HDF5.Group,
+    el_type;
+    dims = nothing,
+    portable,
+)
     metadata_group = HDF5.create_group(group, "metadata")
     metadata_group["type"] = string(el_type)
     metadata_group["serialized_type"] = serialize_to_byte_array(el_type)
@@ -502,10 +430,10 @@ end
 """
     load_hdf5_vector(group::HDF5.Group)
 
-Reconstruct an HDF5 vector from a group created by `create_hdf5_vector`.  The
-metadata stored in the group (type, dimensions, portability) is used to determine
-which specific vector implementation to instantiate.  This form takes only the
-`group` and pulls the element type from the metadata.
+Reconstructs an HDF5 vector from a group created by `create_hdf5_vector`. The metadata stored
+in the group (type, dimensions, portability) is used to determine which specific vector
+implementation to instantiate. This form takes only the `group` and pulls the element type
+from the metadata.
 """
 function load_hdf5_vector(group::HDF5.Group)
     metadata_group = group["metadata"]
@@ -522,7 +450,7 @@ end
 """
     load_hdf5_vector(group::HDF5.Group, el_type)
 
-Reconstruct an HDF5 vector when the caller already knows the element type. When loading a
+Reconstructs an HDF5 vector when the caller already knows the element type. When loading a
 group created by `create_hdf5_vector`, its stored dimensions and portability setting are
 used to select the storage representation.
 """
@@ -574,9 +502,8 @@ function copy_to_hdf5_vector(
     )
 end
 
-# The generic implementation of this just creates the vector and then fills it in one by
-# one. This is slow, but it works, and some things like serialization can't really be made
-# faster anyway, so it's a useful default method.
+# The generic implementation creates the vector and fills it one element at a time. Storage
+# backends can specialize this method when their representation supports a bulk write.
 function copy_to_hdf5_vector(
     style::AbstractHDF5VectorStorageStyle,
     group::HDF5.Group,
@@ -619,11 +546,8 @@ end
 # HDF5VectorOfElementalTypes #
 ##############################
 
-# We can implement this set of behavior and use it across a variety of types by exposing
-# a few functions that specify how an element type becomes an HDF5 array.
-
-# We could potentially make other structs like this to specialize on scalar types vs vectors
-# types, but it's not clear that we need to do that.
+# `construct` and `deconstruct` allow multiple Julia element types to share this dataset
+# implementation while using different HDF5 representations.
 mutable struct HDF5VectorOfElementalTypes{T, DT} <: AbstractHDF5Vector{T}
     dataset::HDF5.Dataset
     datatype::Type{DT}
@@ -669,22 +593,17 @@ function copy_to_hdf5_vector(
     array = datatype[deconstruct(type, el) for el in collection]
     n = length(array)
 
-    # This is basically the same as create_hdf5_vector.
     this_group = HDF5.create_group(group, name)
     store_metadata(style, this_group, el_type; portable)
 
-    # Here, however, we have the length. Nonetheless, we want this to be able to grow, so we
-    # will create it with a dataspace explicitly (rather than just setting
-    # this_group["data"] to array).
+    # Use an extensible dataspace so the copied vector can continue to grow.
     vector_dims = (n,)
     max_dims = (-1,) # This can grow forever.
     dataspace = HDF5.dataspace(vector_dims, max_dims)
     dataset = create_dataset(this_group, "data", datatype, dataspace; chunk = (chunk_length,))
 
-    # Assign the prepared array to the HDF5 file.
     this_group["data"][:] = array
 
-    # Now we have a normal HDF5 vector.
     return HDF5VectorOfElementalTypes{el_type, datatype}(dataset, datatype, n)
 
 end
@@ -696,7 +615,7 @@ function load_hdf5_vector(
     kwargs...,
 )
     dataset = group["data"]
-    datatype = style.datatype # eltype(dataset)
+    datatype = style.datatype
     count = size(dataset)[end]
     return HDF5VectorOfElementalTypes{el_type, datatype}(dataset, datatype, count)
 end
@@ -835,10 +754,10 @@ end
 # HDF5VectorOfArrayishTypes #
 #############################
 
-# There are only two differences between the elemental and array types: the array uses
-# `colons`, and it constructs from a view into the matrix.
-
-# Potentially, the style itself could encode dimensions and eltype.
+"""
+Used to stack fixed-size array-like values in one multidimensional HDF5 dataset. `datatype`
+is the scalar HDF5 representation and `dims` contains the dimensions of one vector element.
+"""
 struct ArrayStorageStyle{HT, ND} <: AbstractHDF5VectorStorageStyle
     datatype::Type{HT}
     dims::NTuple{ND, Int64}
@@ -852,9 +771,8 @@ function fixed_array_storage_style(element_type, dims; kwargs...)
     return ArrayStorageStyle(datatype, dims)
 end
 
-# Here, T is the eltype of the arrays that we're collecting. D is a tupel whose "field
-# types" are the dimensionis, like Tuple{D1, D2, D3...} (there are "value types"). DT is the
-# HDF5 datatype being used for storage.
+# Here, T is the type of each array-like element. The field types of D encode the element
+# dimensions, as in Tuple{D1, D2, D3}. DT is the HDF5 datatype used for storage.
 mutable struct HDF5VectorOfArrayishTypes{T, D, DT} <: AbstractHDF5Vector{T}
     dataset::HDF5.Dataset
     datatype::Type{DT}
@@ -992,7 +910,7 @@ end
 
 function copy_each_frame_and_construct!(arr, collected::Vector{T}, data::Array{ET, N}, n) where {T, ET, N}
     for k in 1:n
-        v = view(data, (Colon() for _ in 1:N-1)..., k) # view seems to allocate for matrices and above.
+        v = view(data, (Colon() for _ in 1:N-1)..., k)
         collected[k] = construct(typeof(arr), v)
     end
 end
@@ -1019,15 +937,17 @@ end
 
 import Serialization
 
-# Make a style so that users can apply the style trait to their custom types.
+"""
+Used to store each vector element with Julia's `Serialization` format. The serialized bytes
+are Julia-specific, and this representation does not support replacing existing elements.
+"""
 struct ByteArrayStorageStyle <: AbstractHDF5VectorStorageStyle end
 
-# Create a type to handle anything that needs to go to/from JSON. We'll just store a single-
-# dataset HDF5 vector of strings inside.
+# Serialized values are concatenated in `storage`; `stops` records the cumulative ending
+# byte position of each value.
 mutable struct HDF5VectorWithByteArrayStorage{T} <: AbstractHDF5Vector{T}
     storage::HDF5VectorOfElementalTypes{UInt8, UInt8}
     stops::HDF5VectorOfElementalTypes{Int64, Int64}
-    # We could add the IOBuffer here and always use the same one.
 end
 
 function create_hdf5_vector(
@@ -1125,8 +1045,8 @@ function Base.push!(arr::HDF5VectorWithByteArrayStorage{T}, el::T) where {T}
 end
 
 function Base.setindex!(arr::HDF5VectorWithByteArrayStorage, el, k)
-    # To implement this, we'd need to completely redo the byte array and all of the stops.
-    # Let's just not support this for serialized types.
+    # Replacing one value could change its byte length and require rewriting all later stop
+    # positions, so byte-array storage is append-only.
     error("setindex! is not supported for HDF5VectorWithByteArrayStorage.")
 end
 
@@ -1136,7 +1056,7 @@ function deserialize_from_vector!(io, byte_array::Vector{UInt8}, start, stop)
         write(io, byte_array[k])
     end
     seekstart(io)
-    Serialization.deserialize(io) # This reads everything, resetting the buffer.
+    return Serialization.deserialize(io)
 end
 
 function Base.getindex(arr::HDF5VectorWithByteArrayStorage{T}, k::Int) where {T}
@@ -1161,7 +1081,7 @@ end
 ##############################
 
 mutable struct HDF5VectorOfCompositeTypes{T} <: AbstractHDF5Vector{T}
-    arrays::Vector{AbstractHDF5Vector} # Use a Tuple to zip it?
+    arrays::Vector{AbstractHDF5Vector}
     count::Int64
 end
 
@@ -1182,7 +1102,7 @@ function create_hdf5_vector(
             create_hdf5_vector(
                 data_group,
                 string(fn),
-                ft; # Since this comes from the _type_, abstract types like NamedTuple may fail here.
+                ft;
                 chunk_length,
                 portable,
             ) for (fn, ft) in zip(fieldnames(T), fieldtypes(T))
@@ -1275,8 +1195,8 @@ function Base.push!(arr::HDF5VectorOfCompositeTypes{T}, el::T) where {T}
     return arr
 end
 
-# This assumes the struct can be created with its individual fields, which isn't perfectly
-# general, but what else can we do? Something with StructTypes?
+# Default composite reconstruction calls the element type with its field values. Types that
+# require a different constructor can define a more specific `construct` method.
 function Base.getindex(arr::HDF5VectorOfCompositeTypes{T}, k::Int) where {T}
     return construct(typeof(arr), ((getindex(sub_array, k) for sub_array in arr.arrays)...,))
 end
@@ -1300,8 +1220,10 @@ end
 # JSON Serialization #
 ######################
 
-# We define the storage style here, but its implementation is in HDF5VectorsJSON3Ext, which
-# is only loaded if JSON3 is loaded.
+"""
+Used to store each vector element as a JSON string through JSON3. JSON3 needs to be loaded
+before a vector with this style is created or loaded.
+"""
 struct JSONStorageStyle <: AbstractHDF5VectorStorageStyle end
 
 ###############
@@ -1332,7 +1254,8 @@ deconstruct(::Type{HDF5VectorOfElementalTypes{String, DT}}, el::String) where {D
 # Char #
 ########
 
-storage_style(el_type::Type{<:Char}; kwargs...) = ElementalStorageStyle(Int32) # I don't know why these are Int32 instead of Int.
+# Int32 is an HDF5-native, fixed-width type large enough for every Unicode code point.
+storage_style(el_type::Type{<:Char}; kwargs...) = ElementalStorageStyle(Int32)
 construct(::Type{HDF5VectorOfElementalTypes{Char, DT}}, el::Int32) where {DT} = Char(el)
 deconstruct(::Type{HDF5VectorOfElementalTypes{Char, DT}}, el::Char) where {DT} = Int32(el)
 
@@ -1411,7 +1334,7 @@ end
 
 # A single element of the vector we're setting up will be an Array. If that array's
 # dimensions are known and it stores elemental types, then we can use our efficient
-# ArrayStorageStyle. See if the eltype of the Array shold use the elemental style.
+# ArrayStorageStyle. Check whether the element type has an elemental representation.
 function storage_style(::Type{<:Array{T, N}}; dims = nothing, kwargs...) where {T, N}
     dims = validate_dims(dims, N)
     if !isnothing(dims)
