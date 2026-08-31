@@ -52,6 +52,11 @@ function test_collection(
     arr2 = copy_to_hdf5_vector(fid["/"], name * "-copy", source; chunk_length, create_kwargs...)
     @test collect(arr2) == source
 
+    # Check that the copied vector was fully persisted, rather than only returning an
+    # in-memory vector that matches the source.
+    arr2_reloaded = load_hdf5_vector(fid[name * "-copy"])
+    @test collect(arr2_reloaded) == source
+
     # Now try loading the array using metadata and also via the explicit-el_type overload.
     arr3 = load_hdf5_vector(fid[name])
     @test collect(arr3) == source
@@ -179,11 +184,27 @@ end
 end
 
 @testset "serialization types" begin
+
     h5open("$out_dir/serialization_types.h5", "w") do fid
+
+        # Check that the generic copy fallback honors the explicitly selected style.
+        source = collect(1:10)
+        arr = copy_to_hdf5_vector(
+            HDF5Vectors.ByteArrayStorageStyle(),
+            fid["/"],
+            "explicit_byte_array_style",
+            source;
+            portable = true,
+        )
+        @test arr isa HDF5Vectors.HDF5VectorWithByteArrayStorage{Int}
+        @test collect(arr) == source
+
         test_collection(fid, "nonconcrete_types", [MyNoncreteType((; k, )) for k in 1:10])
         test_collection(fid, "serializing_types", [MySerializingType(string(k), [k, 2k, 3k], MyType(4k, 5k)) for k in 1:11])
         test_collection(fid, "json_types", [MyJSONishType(string(k), [k, 2k, 3k], MyType(4k, 5k)) for k in 1:11])
+
     end
+
 end
 
 # verify error behaviour for unsupported operations
