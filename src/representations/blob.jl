@@ -10,6 +10,7 @@
 # Blob Codec #
 ##############
 
+"""A codec that uses Julia `Serialization` to encode a value as bytes."""
 struct SerializationCodec{T} <: AbstractCodec{T, Vector{UInt8}} end
 
 function encode_value(::SerializationCodec{T}, value::T) where {T}
@@ -32,6 +33,12 @@ end
 # Blob Schema #
 ###############
 
+"""
+    BlobSchema(codec::AbstractCodec{T, Vector{UInt8}})
+
+Describes variable-length byte values stored in concatenated `bytes` and cumulative
+`stops` datasets.
+"""
 struct BlobSchema{T, C <: AbstractCodec{T, Vector{UInt8}}} <: AbstractSchema{T}
     codec::C
 end

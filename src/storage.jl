@@ -5,7 +5,32 @@
 # A store contains open HDF5 objects but no logical type conversion. Its methods read and
 # write values that have already passed through the corresponding schema. This boundary
 # keeps validation and codec failures out of the physical mutation layer.
+"""
+An open physical HDF5 representation that reads and writes values already encoded by an
+[`AbstractSchema`](@ref). Stores contain no logical type conversion.
+"""
 abstract type AbstractStore end
+
+"""Creates an empty physical store beneath an HDF5 vector's `data` group."""
+function create_store end
+
+"""Opens and validates a physical store beneath an HDF5 vector's `data` group."""
+function open_store end
+
+"""Returns a store's logical physical length, or `nothing` when it has no payload length."""
+function physical_length end
+
+"""Initializes a newly created empty store from a complete encoded batch."""
+function initialize_encoded! end
+
+"""Appends one encoded value at the supplied next logical index."""
+function append_encoded! end
+
+"""Reads one encoded value or an encoded unit range from a physical store."""
+function read_encoded end
+
+"""Validates a prepared batch before a recursively nested store begins initialization."""
+function validate_encoded_batch end
 
 # `create_store` methods are recursive physical constructors. The public vector layer
 # validates options shared by every representation, such as chunk length, once before it
@@ -56,6 +81,12 @@ end
 
 # Most stores already return a vector of encoded logical values for a range. Dense storage
 # specializes this operation because its natural batch is one higher-dimensional array.
+"""
+    read_encoded_batch(store::AbstractStore, indices::UnitRange{Int})
+
+Reads the encoded batch consumed by [`decode_batch`](@ref). The default uses the store's
+unit-range [`read_encoded`](@ref) method.
+"""
 function read_encoded_batch(store::AbstractStore, indices::UnitRange{Int})
     return read_encoded(store, indices)
 end

@@ -5,9 +5,10 @@
 """
     HDF5Vector{T} <: AbstractVector{T}
 
-An HDF5-backed vector with logical element type `T`. Vectors are normally constructed with
-[`create_hdf5_vector`](@ref), [`copy_to_hdf5_vector`](@ref), or
-[`load_hdf5_vector`](@ref).
+An append-only HDF5-backed vector with logical element type `T`. It supports ordinary
+`AbstractVector` reads and grows with `push!`. Vectors are normally constructed with
+[`create_hdf5_vector`](@ref), [`copy_to_hdf5_vector`](@ref), or [`load_hdf5_vector`](@ref),
+and remain usable only while their HDF5 file is open.
 """
 mutable struct HDF5Vector{
     T,
@@ -93,8 +94,16 @@ end
         serialize_nonconcrete = true,
     )
 
-Creates an empty HDF5-backed vector under `name`. Schema inference selects and records the
-complete physical representation when the vector is created.
+Creates an empty `HDF5Vector{type}` in the new child `name` of `group`. `name` must be one
+unused HDF5 path component. Schema inference selects and records the complete physical
+representation before the vector is returned.
+
+`dims` declares the fixed shape of a dynamically sized array element. `chunk_length`
+controls the extensible dimension of physical HDF5 chunks. `portable = true` gives bits-type
+records field-oriented storage. `serialize_arrays` and `serialize_nonconcrete` control
+whether schema inference may select Julia serialization for those categories.
+
+Values later passed to `push!` must already have exactly the declared element type.
 """
 function create_hdf5_vector(
     group::HDF5.Group,
@@ -132,7 +141,9 @@ end
         chunk_length = 1000,
     )
 
-Creates an empty HDF5-backed vector using an explicit schema.
+Creates an empty HDF5-backed vector using an already selected schema. The schema determines
+the logical type, codecs, and physical representation; only `chunk_length` remains a
+creation option.
 """
 function create_hdf5_vector(
     group::HDF5.Group,
@@ -174,9 +185,17 @@ end
 """
     load_hdf5_vector(group::HDF5.Group)
     load_hdf5_vector(group::HDF5.Group, type::Type)
+    load_hdf5_vector(group::HDF5.Group, schema::AbstractSchema)
 
-Loads an HDF5-backed vector from its stored schema. The explicit-type form avoids
-deserializing the logical Julia type from metadata.
+Opens and validates an existing HDF5 vector group.
+
+The one-argument form deserializes the exact stored schema. The explicit-type form repeats
+schema inference from the options stored when the vector was created from a type, avoiding
+schema deserialization. A vector created from an explicit schema still needs that stored
+schema unless the caller supplies the matching schema directly.
+
+The returned vector remains usable only while the HDF5 file is open. Files whose schema or
+values require Julia deserialization should be trusted.
 """
 function load_hdf5_vector(group::HDF5.Group)
     return load_hdf5_vector(group, read_schema(group))
@@ -270,8 +289,12 @@ end
         kwargs...,
     )
 
-Creates an HDF5-backed vector and copies an ordinary vector into it with one recursive bulk
-write.
+Creates an HDF5-backed vector and copies `collection` into it with one recursive bulk write.
+The declared element type is `eltype(collection)`, and the creation options have the same
+meaning as for [`create_hdf5_vector`](@ref).
+
+Destination validation, schema inference, and encoding of the complete collection finish
+before the destination group is created. The input must currently be an `AbstractVector`.
 """
 function copy_to_hdf5_vector(
     group::HDF5.Group,

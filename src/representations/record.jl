@@ -20,8 +20,24 @@ abstract type AbstractRecordCodec{T} end
 
 logical_type(::AbstractRecordCodec{T}) where {T} = T
 
+"""
+    decompose(codec::AbstractRecordCodec, value)
+
+Returns the ordered logical fields of one record value. The result must contain one value
+for each child of the corresponding [`RecordSchema`](@ref).
+"""
+function decompose end
+
+"""
+    compose(codec::AbstractRecordCodec, fields::Tuple)
+
+Reconstructs one logical record value from its ordered, recursively decoded fields.
+"""
+function compose end
+
 # RecordSchema owns the meaningful field names used in metadata and HDF5 paths. The
 # built-in struct codec therefore needs only field positions to decompose a value.
+"""The default record codec for a concrete struct with `N` fields."""
 struct StructCodec{T, N} <: AbstractRecordCodec{T} end
 
 function decompose(::StructCodec{T, N}, value::T) where {T, N}
@@ -32,6 +48,7 @@ function compose(::StructCodec{T}, values::Tuple) where {T}
     return T(values...)
 end
 
+"""The built-in record codec for a heterogeneous tuple."""
 struct TupleCodec{T} <: AbstractRecordCodec{T} end
 
 decompose(::TupleCodec{T}, value::T) where {T} = value
@@ -43,11 +60,13 @@ function compose(::TupleCodec{T}, values::Tuple) where {T}
     return values
 end
 
+"""The built-in record codec for a named tuple."""
 struct NamedTupleCodec{T} <: AbstractRecordCodec{T} end
 
 decompose(::NamedTupleCodec{T}, value::T) where {T} = Tuple(value)
 compose(::NamedTupleCodec{T}, values::Tuple) where {T} = T(values)
 
+"""The record codec used when a static array cannot use dense storage."""
 struct StaticArrayCodec{T} <: AbstractRecordCodec{T} end
 
 decompose(::StaticArrayCodec{T}, value::T) where {T} = (value.data,)
@@ -57,6 +76,12 @@ compose(::StaticArrayCodec{T}, values::Tuple) where {T} = T(only(values))
 # Record Schema #
 #################
 
+"""
+    RecordSchema(type, names, codec, children)
+
+Describes a field-oriented value with ordered field `names`, a record `codec`, and one
+recursive child schema per field.
+"""
 struct RecordSchema{
     T,
     N,

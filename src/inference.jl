@@ -3,6 +3,12 @@
 ####################
 
 """
+    SchemaPolicy(;
+        portable = true,
+        serialize_arrays = true,
+        serialize_nonconcrete = true,
+    )
+
 Controls default schema inference without becoming part of storage execution.
 
 `portable` selects field-oriented records instead of native HDF5 representations for

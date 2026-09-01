@@ -1,41 +1,41 @@
 # When Writing to HDF5 Fails
 
-HDF5Vectors arranges ordinary validation and bookkeeping so many expected errors occur before the file changes. It cannot make every HDF5 write all-or-nothing, and it does not undo file changes that completed before a later operation failed.
+HDF5Vectors performs type checks, schema inference, and logical encoding before changing physical storage. This prevents many ordinary input errors from leaving partial data behind. HDF5 itself does not make a group of dataset writes all-or-nothing, however, and HDF5Vectors does not attempt to undo writes that completed before a later low-level operation failed.
 
-## Errors Detected Before Writing
+## Errors Detected Before Physical Writes
 
-Values passed to `push!` must already have the vector's declared element type, so a value of the wrong type is rejected before the method begins. Dynamically sized array elements are also checked against their declared dimensions before their dataset is extended.
+The declared element type is enforced by dispatch, so a value of the wrong type is rejected before `push!` begins. `push!` then encodes the complete logical value before extending any dataset. This includes dimension checks, custom codecs, record decomposition, and Julia serialization.
 
-The specialized bulk-copy implementations for elemental values, fixed-size arrays, and Julia-serialized values prepare or serialize the complete input collection before creating the destination HDF5 group. A conversion, dimension, or serialization error during that preparation therefore does not leave a destination with the requested name. The generic and composite bulk-copy implementations perform multiple writes and cannot provide the same protection for every input error.
+`copy_to_hdf5_vector` validates the destination and schema and encodes the complete input vector before creating the destination group. A codec, dimension, or serialization error during this preparation therefore leaves no child with the requested name.
 
-## In-Memory Lengths
+These guarantees cover errors in ordinary Julia conversion and validation. They cannot prevent a low-level failure after HDF5 mutation begins.
 
-An HDF5 vector updates its in-memory length only after its value has been written successfully. If a write throws an error, `length(vector)` therefore continues to report the number of completed elements known to that Julia object.
+## Logical Counts
 
-This does not mean the HDF5 file is unchanged. Extensible datasets must sometimes be enlarged before the new value is written. If conversion or the HDF5 write then fails, the dataset can retain that larger extent even though the in-memory length was not increased. Closing and loading that vector again may expose an unwritten fill value or fail while validating its datasets.
+Every vector records its logical length in `metadata/count`. A successful append writes the encoded value first, persists the new count second, and updates the Julia object's in-memory count last.
 
-## Composite Values Can Be Partially Written
+If the value write fails, `length(vector)` continues to report the previous count. The physical dataset may nevertheless have been extended before the failure. If the value succeeds but writing `metadata/count` fails, the physical data can contain one more value than the recorded logical count. Loading checks these lengths and rejects a mismatch.
 
-Field-oriented composite storage writes each field to a separate nested HDF5 vector. Suppose a value has fields `time` and `payload`. If writing `time` succeeds and writing `payload` fails, the `time` dataset contains one more value while the `payload` dataset does not. The outer vector's in-memory length is not increased, but the child datasets now have different lengths.
+## Records Can Be Partially Written
 
-Loading field-oriented storage checks that every field has the same number of values. In this example, [`load_hdf5_vector`](@ref) throws a `DimensionMismatch` rather than constructing elements from mismatched fields. HDF5Vectors does not remove the extra `time` value automatically.
+Field-oriented records write each field to a separate physical store. Encoding prepares every field first, but the HDF5 writes still happen one child at a time.
 
-Replacing a composite element also writes its fields one at a time. HDF5Vectors first checks bounds and confirms that every field supports replacement, but a low-level HDF5 failure can still occur after one field was replaced and before the next one was changed.
+Suppose a record contains `time` and `payload`. If the `time` write succeeds and the `payload` write encounters an HDF5 error, those child stores have different lengths. The outer count is not advanced. Loading checks the child lengths and throws a `DimensionMismatch` instead of combining mismatched fields.
 
-## Serialized Values Can Be Partially Written
+The same limitation applies to a bulk copy after its destination has been created. All input values have already been encoded, but a filesystem or HDF5 failure can interrupt initialization between child stores.
 
-Julia byte serialization stores element bytes and their cumulative ending positions in separate nested vectors. A failure while appending bytes can leave extra bytes without a corresponding ending position. Loading checks that the final ending position agrees with the byte count and throws a `DimensionMismatch` when they differ.
+## Blob Data Can Be Partially Written
 
-## Process and HDF5 Failures
+Blob storage uses separate `bytes` and `stops` datasets. A failure can leave appended bytes without their cumulative ending position, or an ending position without an updated logical count. Loading checks that the final stop agrees with the total byte count and that the physical value count agrees with `metadata/count`.
 
-A process crash, forced termination, loss of power, full disk, filesystem error, or unrecoverable HDF5 error can interrupt any write. For example, the process could stop after an HDF5 dataset is extended but before its new value is written, or after one field of a composite value is stored but before the remaining fields are stored. The resulting HDF5 vector may contain an extra fill value, mismatched field lengths, incomplete serialized bytes, or storage that HDF5 itself cannot open.
+## Process and Filesystem Failures
 
-HDF5Vectors cannot catch an error when the Julia process no longer exists, and it does not keep a second copy of previous HDF5 state from which to restore the file.
+A process crash, forced termination, loss of power, full disk, filesystem error, or unrecoverable HDF5 error can interrupt any physical write. For example, the process might stop after a dataset is extended but before the new value is written, or after one record field is stored but before its siblings are stored. The result may contain an extra fill value, mismatched field lengths, incomplete blob data, or an HDF5 object that cannot be opened.
 
-## What to Do After a Write Failure
+HDF5Vectors cannot catch an error after the Julia process has stopped, and it does not keep a second copy of prior HDF5 state from which to restore the file.
 
-Application-specific constraints can be validated before `push!` is called. When a complete collection already exists and fits in memory, [`copy_to_hdf5_vector`](@ref) is another useful option because its specialized bulk-copy paths can detect more ordinary input errors before creating HDF5 storage.
+## Recovering After a Failure
 
-After a caught write or HDF5 error, the affected vector should not be assumed safe to keep using. When possible, the file can be closed normally and reopened, and [`load_hdf5_vector`](@ref) can then validate the stored layout. If loading fails or the values do not match the application's expectations, the safest recovery is to recreate that vector from a trusted source or checkpoint.
+After a caught HDF5 write error, the affected vector should not be assumed safe for further use. When possible, the file can be closed and reopened, and [`load_hdf5_vector`](@ref) can validate the stored schema, datasets, and logical count. If loading fails or the stored values do not meet the application's expectations, the safest recovery is to recreate that vector from a trusted source or checkpoint.
 
-For outputs that must survive interruption, keeping the source data or periodic checkpoints makes it possible to rebuild the current vector. At the application level, another option is to write a new HDF5 file and replace the previous completed file only after the new file has closed successfully.
+Applications that must survive interruption can retain their source data or periodic checkpoints. Another useful pattern is to write a new HDF5 file and replace the previous completed file only after the new file has closed successfully.

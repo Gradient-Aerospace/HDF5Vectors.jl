@@ -10,16 +10,19 @@
 # Scalar Codecs #
 #################
 
+"""A codec that stores a supported Julia scalar without conversion."""
 struct IdentityCodec{T} <: AbstractCodec{T, T} end
 
 encode_value(::IdentityCodec{T}, value::T) where {T} = value
 decode_value(::IdentityCodec{T}, value::T) where {T} = value
 
+"""A codec that stores a `Char` as its `Int32` Unicode code point."""
 struct CharCodec <: AbstractCodec{Char, Int32} end
 
 encode_value(::CharCodec, value::Char) = Int32(value)
 decode_value(::CharCodec, value::Int32) = Char(value)
 
+"""A codec that stores a `Symbol` as a `String`."""
 struct SymbolCodec <: AbstractCodec{Symbol, String} end
 
 encode_value(::SymbolCodec, value::Symbol) = String(value)
@@ -28,8 +31,10 @@ decode_value(::SymbolCodec, value::String) = Symbol(value)
 # JSON storage has the same physical shape as ordinary scalar string storage. The codec
 # belongs to the core schema vocabulary so schemas containing it can be constructed and
 # deserialized without JSON3. Its conversion methods are supplied only when JSON3 loads.
+"""A codec that stores a logical value of type `T` as a JSON string using JSON3."""
 struct JSONCodec{T} <: AbstractCodec{T, String} end
 
+"""A codec that stores an enum using its integer base type `H`."""
 struct EnumCodec{T, H} <: AbstractCodec{T, H} end
 
 encode_value(::EnumCodec{T, H}, value::T) where {T, H} = H(value)
@@ -40,6 +45,11 @@ decode_value(::EnumCodec{T, H}, value::H) where {T, H} = T(value)
 # Scalar Schema #
 #################
 
+"""
+    ScalarSchema(codec::AbstractCodec)
+
+Describes one logical value encoded as one scalar HDF5-compatible value.
+"""
 struct ScalarSchema{T, H, C <: AbstractCodec{T, H}} <: AbstractSchema{T}
     codec::C
 end

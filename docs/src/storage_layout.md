@@ -4,125 +4,128 @@
 CurrentModule = HDF5Vectors
 ```
 
-The HDF5 layout is an important part of HDF5Vectors: many files are written in Julia and read by tools in Python, MATLAB, C++, or other environments. This page describes where values are stored so those readers do not need HDF5Vectors or Julia.
+Many HDF5Vectors files are written in Julia and read in Python, MATLAB, C++, or other environments. The paths under `data` are therefore a documented part of the format rather than an incidental implementation detail.
 
-## Common Structure
+## The Vector Group
 
-Every HDF5 vector occupies an HDF5 group. The group contains `metadata` and `data`; `data` is either the value dataset or another group containing recursively stored values.
-
-```
-/x/                                      # HDF5 vector group
-/x/data                                  # Dataset or group containing values
-/x/metadata/                             # HDF5Vectors metadata
-/x/metadata/type                         # Human-readable Julia element type
-/x/metadata/serialized_type              # Julia-serialized element type
-/x/metadata/dimensions_are_constant      # Whether fixed dimensions were stored
-/x/metadata/dimensions                   # Julia dimensions, or an empty array
-/x/metadata/portable                     # Value of the portable option
-```
-
-Readers outside Julia usually need only the paths under `data`. The plain-text `metadata/type` value can be informative, but `metadata/serialized_type` uses Julia's `Serialization` format and is used by `load_hdf5_vector(group)` to reconstruct the Julia element type. Nested HDF5 vectors, such as the fields of a composite value, have their own `metadata` and `data` children.
-
-HDF5Vectors is intended to load trusted files. `load_hdf5_vector(group)` deserializes `metadata/serialized_type`; the explicit-type form `load_hdf5_vector(group, el_type)` avoids that metadata deserialization, but reading a vector with Julia byte serialization still deserializes its element values. Data from an untrusted HDF5 file should not be deserialized.
-
-## Elemental Values
-
-Numbers, booleans, strings, symbols, characters, and enums use a one-dimensional dataset at `data`:
+Every HDF5 vector occupies one group with two children:
 
 ```
-/x/               # HDF5 vector group
-/x/data           # Dataset with N values
-/x/metadata/      # Metadata group
+/values/
+/values/data/                   # Physical value storage
+/values/metadata/               # HDF5Vectors schema and bookkeeping
 ```
 
-Native integers and floats retain their HDF5 datatypes, while `Bool` uses an 8-bit HDF5 bitfield. A `Symbol` is stored as a string, a `Char` as an `Int32` Unicode code point, and an enum as its integer base type. An external reader must know the Julia-level interpretation if it needs to reconstruct those transformed values.
-
-## Array-Like Values
-
-For Julia elements with dimensions `(M, N, ...)`, HDF5Vectors presents the value dataset in Julia with dimensions `(M, N, ..., Z)`, where `Z` is the number of vector elements. The last Julia dimension indexes the HDF5 vector.
-
-HDF5.jl reverses multidimensional extents at the HDF5 C-format boundary to account for Julia's column-major array order. A row-major reader such as h5py therefore observes the raw HDF5 shape `(Z, ..., N, M)`. For example, 100 Julia matrices with size `(2, 3)` are stored in a dataset that HDF5.jl presents as `(2, 3, 100)` and h5py presents as `(100, 3, 2)`. In h5py, `data[k]` selects one vector element, with that element's axes in reversed order relative to Julia.
+The logical length is stored at `/values/metadata/count` as a scalar `Int64`. The most useful additional metadata paths are:
 
 ```
-/positions/              # HDF5 vector group
-/positions/data          # Multidimensional value dataset
-/positions/metadata/     # Includes dimensions in Julia order
+/values/metadata/format_name
+/values/metadata/format_version
+/values/metadata/logical_type
+/values/metadata/schema/
+/values/metadata/serialized_schema
 ```
 
-This layout is used for supported `SVector`, `SMatrix`, `SArray`, and homogeneous `NTuple` values, as well as `Vector`, `Matrix`, and `Array` values created with `dims`.
+The tree under `metadata/schema` describes the selected representation with ordinary HDF5 strings, integers, and groups. It records schema and codec identifiers, logical and encoded type names, dimensions, record field names, and child schemas as applicable.
 
-## Field-Oriented Composite Values
+`serialized_schema` contains the exact Julia schema object. Ordinary untyped loading deserializes it so application-defined codecs can be recovered without a registry inside HDF5Vectors. Typed loading, such as `load_hdf5_vector(group, MyType)`, can repeat inference from the stored options and validate the result against the ordinary schema tree. Files passed to either loading form should be trusted whenever their values or schema require Julia deserialization.
 
-Portable composite storage gives every field its own nested HDF5 vector. These Julia types provide an example:
+External readers normally need only `metadata/count`, the documented schema information they care about, and the paths under `data`.
+
+## Scalar Values
+
+Numbers, booleans, strings, symbols, characters, enums, JSON strings, and application values with scalar codecs use:
+
+```
+/values/data/values             # One-dimensional dataset with N encoded values
+```
+
+Native integers and floats retain their corresponding HDF5 datatypes. `Symbol` is encoded as a string, `Char` as an `Int32` Unicode code point, and an enum as its integer base type. A custom scalar codec records its encoded type in `/values/metadata/schema/encoded_type`.
+
+A JSON schema also uses `/values/data/values`; each entry is one compact JSON string. No JSON-specific group is added.
+
+## Dense Array-Like Values
+
+A fixed-size array-like element is stacked along one additional Julia dimension. If each Julia element has dimensions `(M, N, ...)` and the vector has length `Z`, HDF5.jl presents the value dataset as:
+
+```
+/values/data/values             # Julia shape (M, N, ..., Z)
+```
+
+The final Julia dimension selects the HDF5Vector element. This layout is used for supported homogeneous tuples and static arrays, and for dynamic `Array` types created with `dims`.
+
+HDF5.jl reverses multidimensional extents at the HDF5 C boundary to account for Julia's column-major order. A row-major reader such as h5py therefore sees the raw shape `(Z, ..., N, M)`. For example, 100 Julia matrices of size `(2, 3)` appear as `(2, 3, 100)` through HDF5.jl and `(100, 3, 2)` through h5py. In h5py, `dataset[k]` selects one vector element whose axes appear in the reverse order from Julia.
+
+## Field-Oriented Records
+
+Portable records place one recursively encoded column under each field name. Consider:
 
 ```julia
-struct MySubType
-    c::Int64
-    d::NTuple{2, Float64}
+using StaticArrays
+
+struct GPSTimeStamp
+    weeks::Int32
+    microseconds::Int64
 end
 
-struct MyType
-    a::Float64
-    b::MySubType
+struct Measurement
+    timestamp::GPSTimeStamp
+    temperature::Float64
+    position::SVector{3, Float64}
 end
 ```
 
-For a vector named `my_type` inside `/my_group`, the value datasets are stored at the following paths. Each named field path is itself an HDF5 vector group; intermediate metadata groups are omitted from this diagram for clarity.
+A vector stored at `/measurements` has this physical value layout:
 
 ```
-/my_group/my_type/                      # HDF5 vector for MyType
-/my_group/my_type/data/a/               # HDF5 vector for field a
-/my_group/my_type/data/a/data           # Float64 dataset for field a
-/my_group/my_type/data/b/               # HDF5 vector for field b
-/my_group/my_type/data/b/data/c/        # HDF5 vector for nested field c
-/my_group/my_type/data/b/data/c/data    # Int64 dataset for nested field c
-/my_group/my_type/data/b/data/d/        # HDF5 vector for nested field d
-/my_group/my_type/data/b/data/d/data    # Array-like dataset for nested field d
+/measurements/data/timestamp/weeks/values
+/measurements/data/timestamp/microseconds/values
+/measurements/data/temperature/values
+/measurements/data/position/values
 ```
 
-Each field dataset contains the same number of vector elements. External readers can reconstruct one `MyType` by reading the same vector index from `a`, `b.c`, and `b.d`.
+The first three datasets have shape `(Z,)` through HDF5.jl. The position dataset has shape `(3, Z)` through HDF5.jl and `(Z, 3)` through a row-major reader such as h5py.
 
-## Native Bits-Type Values
+Every nonconstant field column contains the same number of logical values. An external reader reconstructs one `Measurement` by reading the same vector index from each field path. Nested structs continue to use their field names, so the physical paths remain meaningful without Julia.
 
-When a bits-type composite is created with `portable = false`, HDF5.jl represents the entire Julia value with one HDF5 datatype:
+Tuple fields use the names `1`, `2`, and so on because tuples have positions rather than Julia field names. Named tuples use their names. The ordered field-name vector and recursive child schemas are also recorded under `metadata/schema`; numeric child names there describe schema order, not physical value paths.
 
-```
-/my_group/my_type/          # HDF5 vector group
-/my_group/my_type/data      # Dataset of the HDF5 datatype derived from MyType
-```
+## Native Bits-Type Records
 
-This avoids separate field datasets and is generally faster. An external reader must inspect and interpret the resulting HDF5 datatype, so field-oriented storage is preferable when simple cross-language access matters more than performance.
-
-## Singleton Values
-
-A singleton element type has only one possible value. Its `data` dataset contains one `Int64`: the logical length of the HDF5 vector.
+When a nonzero-size bits type is created with `portable = false`, it may use one HDF5 datatype instead of field-oriented storage:
 
 ```
-/markers/data       # One Int64 containing the number of marker values
+/measurements/data/values       # Dataset of the HDF5 datatype derived from the Julia type
 ```
 
-No individual values are stored. An external reader needs the element type's meaning from the surrounding application or the metadata.
+This representation is often faster. External readers must inspect and interpret the resulting HDF5 datatype, so the default field-oriented layout is generally preferable when portability matters.
+
+## Constant Values
+
+A constant schema stores no per-element values. Its data group is empty:
+
+```
+/markers/data/                  # Empty group
+/markers/metadata/count        # Number of logical marker values
+```
+
+The constant itself is described in the schema metadata. An external reader usually needs application knowledge to assign meaning to the count.
 
 ## Julia-Serialized Values
 
-Byte-array storage concatenates the independently serialized elements and records the cumulative ending byte position of each element:
+Blob storage concatenates the independently serialized values and records the cumulative ending byte position of each one:
 
 ```
-/values/data/bytes/          # Nested HDF5 vector of UInt8
-/values/data/bytes/data      # Concatenated serialized bytes
-/values/data/stops/          # Nested HDF5 vector of Int64
-/values/data/stops/data      # Cumulative byte counts after each element
+/values/data/bytes              # One-dimensional UInt8 dataset
+/values/data/stops              # One-dimensional Int64 dataset
 ```
 
-For a zero-based reader, element `k` starts at zero when `k == 0` and otherwise at `stops[k - 1]`; it ends immediately before `stops[k]`. The byte sequences use Julia's `Serialization` format and are not intended for reconstruction outside Julia. Loading them requires the relevant Julia types and modules to remain available and compatible with the serialized representation.
+For a zero-based reader, element `k` begins at byte zero when `k == 0` and otherwise at `stops[k - 1]`; it ends immediately before `stops[k]`. Repeated stops represent empty encoded values.
 
-## JSON-Serialized Values
+The default blob codec uses Julia's `Serialization` format. These bytes are not suitable for reconstruction outside Julia, and loading them requires the relevant Julia types and modules to be available.
 
-`JSONStorageStyle` stores one compact JSON string for each vector element:
+## Finding the Selected Representation
 
-```
-/values/data/json/          # Nested HDF5 vector of String
-/values/data/json/data      # Dataset containing N JSON strings
-```
+An external tool that does not already know the application schema can inspect `/values/metadata/schema/kind`. The built-in values are `scalar`, `dense`, `record`, `blob`, and `constant`. Record schema nodes contain `field_names` and a `children` group; dense nodes contain `dimensions`; scalar and dense nodes contain `encoded_type`.
 
-External readers can parse the strings with their normal JSON library. The JSON representation and supported Julia types are determined by JSON3.
+Schema and codec identifiers are descriptive strings. Applications can give their custom implementations stable identifiers with [`schema_identifier`](@ref) and [`codec_identifier`](@ref).

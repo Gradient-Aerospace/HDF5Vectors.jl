@@ -5,6 +5,12 @@
 const format_name = "HDF5Vectors"
 const format_version = Int64(1)
 
+"""Writes one schema implementation's readable metadata node."""
+function write_schema_node end
+
+"""Validates one stored metadata node against a selected schema implementation."""
+function validate_schema_node end
+
 # Schema metadata has two complementary forms. The ordinary HDF5 tree describes every
 # physical representation for people and non-Julia readers. A Julia-serialized schema
 # reconstructs the exact codec objects without requiring HDF5Vectors itself to know every
@@ -21,20 +27,27 @@ function deserialize_metadata_value(bytes::Vector{UInt8})
     return Serialization.deserialize(IOBuffer(bytes))
 end
 
-"""
-    schema_identifier(schema::AbstractSchema)
-    codec_identifier(codec)
-
-Returns the stable, human-readable identifier stored for a schema or codec implementation.
-The defaults use the implementation type. An application can specialize these functions
-when it needs an identifier that remains stable across a type rename.
-"""
 function implementation_identifier(value)
     type = typeof(value)
     return string(parentmodule(type), ".", nameof(type))
 end
 
+"""
+    schema_identifier(schema::AbstractSchema)
+
+Returns the stable, human-readable identifier stored for a schema implementation. The
+default uses the implementation type. An application can specialize this function when
+the identifier must remain stable across a type rename.
+"""
 schema_identifier(schema::AbstractSchema) = implementation_identifier(schema)
+
+"""
+    codec_identifier(codec)
+
+Returns the stable, human-readable identifier stored for a codec implementation. The
+default uses the implementation type. An application can specialize this function when
+the identifier must remain stable across a type rename.
+"""
 codec_identifier(codec) = implementation_identifier(codec)
 
 function write_inference_options(metadata_group::HDF5.Group, options)
@@ -219,6 +232,7 @@ read_string(group::HDF5.Group, name::AbstractString) = String(read(group[name]))
 # These methods are the complete format-side interface for a new schema. Built-in schema
 # implementations below intentionally use the same dispatch points available to packages.
 
+"""Writes the metadata fields shared by every schema node."""
 function write_common_schema(group::HDF5.Group, kind, schema)
     group["kind"] = kind
     group["schema"] = schema_identifier(schema)
@@ -226,11 +240,13 @@ function write_common_schema(group::HDF5.Group, kind, schema)
     return nothing
 end
 
+"""Writes the scalar encoded type used by a scalar or dense schema."""
 function write_encoded_type(group::HDF5.Group, schema)
     group["encoded_type"] = string(encoded_type(schema))
     return nothing
 end
 
+"""Validates the metadata fields shared by every schema node."""
 function validate_common_schema(group::HDF5.Group, kind, schema)
 
     validate_type_name(group, logical_type(schema))
@@ -253,11 +269,13 @@ function validate_common_schema(group::HDF5.Group, kind, schema)
 
 end
 
+"""Writes a schema node's human-readable codec identifier."""
 function write_codec(group::HDF5.Group, codec)
     group["codec"] = codec_identifier(codec)
     return nothing
 end
 
+"""Validates a schema node's stored codec identifier."""
 function validate_codec(group::HDF5.Group, codec)
     stored_codec = read_string(group, "codec")
     expected_codec = codec_identifier(codec)
@@ -269,6 +287,7 @@ function validate_codec(group::HDF5.Group, codec)
     return nothing
 end
 
+"""Validates a scalar or dense schema node's stored encoded type."""
 function validate_encoded_type(group::HDF5.Group, schema)
     stored_name = read_string(group, "encoded_type")
     expected_name = string(encoded_type(schema))

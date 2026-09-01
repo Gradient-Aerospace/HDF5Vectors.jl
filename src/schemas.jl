@@ -29,9 +29,24 @@ logical_type(::AbstractSchema{T}) where {T} = T
 # Pure Batch Conversions #
 ##########################
 
+"""
+    encoded_value_type(schema::AbstractSchema)
+
+Returns the Julia type of one complete encoded logical value. This differs from
+[`encoded_type`](@ref) for schemas whose encoded value is a container or record.
+"""
+function encoded_value_type end
+
 # The fallback keeps the encoded values in row order. Record and blob storage initially
 # use this path, while representations with a natural contiguous layout specialize it
 # below. Every value is encoded before the caller creates or changes HDF5 storage.
+"""
+    encode_batch(schema::AbstractSchema, values::AbstractVector)
+
+Encodes a complete logical vector before physical storage is initialized. The default
+returns a vector of individually encoded values; schemas can specialize this method when
+their physical representation has a more efficient batch shape.
+"""
 function encode_batch(
     schema::AbstractSchema{T},
     values::AbstractVector{T},
@@ -43,6 +58,12 @@ function encode_batch(
     return encoded
 end
 
+"""
+    decode_batch(schema::AbstractSchema, encoded)
+
+Decodes a batch returned by the schema's physical store. The default decodes an ordinary
+vector element-by-element.
+"""
 function decode_batch(
     schema::AbstractSchema{T},
     encoded::AbstractVector,

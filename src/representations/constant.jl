@@ -9,6 +9,7 @@
 # Constant Codec #
 ##################
 
+"""A codec that represents every element with one stored constant value."""
 struct ConstantCodec{T} <: AbstractCodec{T, Nothing}
     value::T
 end
@@ -20,6 +21,11 @@ decode_value(codec::ConstantCodec, ::Nothing) = codec.value
 # Constant Schema #
 ###################
 
+"""
+    ConstantSchema(codec::AbstractCodec{T, Nothing})
+
+Describes a logical type with one stored constant value and no per-element physical data.
+"""
 struct ConstantSchema{T, C <: AbstractCodec{T, Nothing}} <: AbstractSchema{T}
     codec::C
 end

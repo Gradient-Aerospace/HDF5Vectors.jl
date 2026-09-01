@@ -1,6 +1,6 @@
 # HDF5Vectors
 
-HDF5Vectors provides vectors whose underlying values live in an HDF5 file rather than in RAM. They support familiar `AbstractVector` operations and can grow over time with `push!`, making them useful for incrementally logging more data than will fit in memory.
+HDF5Vectors provides append-only vectors whose values live in an HDF5 file rather than in RAM. They support familiar `AbstractVector` reads and grow with `push!`, making them useful for incrementally logging more data than will fit in memory. Existing Julia vectors can also be copied efficiently into portable, documented HDF5 layouts.
 
 The package can be installed directly from GitHub:
 
@@ -22,4 +22,4 @@ HDF5.h5open("storage.h5", "w") do file
 end
 ```
 
-The [documentation](https://gradient-aerospace.github.io/HDF5Vectors.jl/) covers supported element types, loading stored vectors, storage layouts, and customization.
+The [documentation](https://gradient-aerospace.github.io/HDF5Vectors.jl/) begins with ordinary creation, loading, and copying, then covers supported element types, cross-language storage layouts, codecs, and custom schemas.

@@ -10,6 +10,12 @@
 # Dense Schema #
 ################
 
+"""
+    DenseSchema(type, dims, element_codec)
+
+Describes fixed-size array-like values whose elements share one scalar codec. Physical
+storage stacks the encoded values along one additional final dimension.
+"""
 struct DenseSchema{T, E, H, N, C <: AbstractCodec{E, H}} <: AbstractSchema{T}
     dims::NTuple{N, Int}
     element_codec::C
