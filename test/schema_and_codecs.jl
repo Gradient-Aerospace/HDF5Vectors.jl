@@ -286,9 +286,9 @@ end
         test_schema_round_trip(nothing_schema, nothing)
         test_schema_round_trip(marker_schema, PrototypeSingleton1{:marker}())
 
-        # This exact shape reproduces the regression that motivated the prototype. The tuple
-        # has one possible value but no zero-argument constructor, so its fields make it a
-        # record rather than a constant.
+        # This exact shape reproduces the regression that motivated the schema
+        # implementation. The tuple has one possible value but no zero-argument constructor,
+        # so its fields make it a record rather than a constant.
         singleton_tuple = (PrototypeSingleton1{:a}(), PrototypeSingleton2{:b}())
         singleton_tuple_type = typeof(singleton_tuple)
         singleton_tuple_schema = infer_schema(singleton_tuple_type)

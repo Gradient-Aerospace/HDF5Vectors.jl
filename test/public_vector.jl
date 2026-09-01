@@ -16,7 +16,7 @@ function test_public_hdf5_vector(
         push!(vector, value)
     end
 
-    # The prototype presents the ordinary one-dimensional array behavior needed by logging
+    # An HDF5Vector presents the ordinary one-dimensional array behavior needed by logging
     # and analysis code, while range reads and collection use one recursive bulk read.
     @test vector isa HDF5Vectors.HDF5Vector{T}
     @test eltype(vector) === T
@@ -246,6 +246,12 @@ end
                 test_public_hdf5_vector(file, name, source; kwargs...)
             end
 
+            # An empty serialized copy has no byte or stop data, but it remains appendable
+            # after loading because its schema and logical count are complete.
+            reloaded_empty_blob = HDF5Vectors.load_hdf5_vector(file["empty_blobs_copy"])
+            push!(reloaded_empty_blob, [1.0, 2.0])
+            @test collect(reloaded_empty_blob) == [[1.0, 2.0]]
+
             # An explicit schema bypasses inference while remaining fully loadable because
             # the exact representation is persisted with the vector.
             native_schema = infer_schema(
@@ -290,6 +296,30 @@ end
                 chunk_length = 0,
             )
             @test !haskey(file, "invalid_copy_chunk")
+            @test_throws ArgumentError HDF5Vectors.create_hdf5_vector(
+                file["/"],
+                "noninteger_chunk",
+                Int64;
+                chunk_length = 2.5,
+            )
+            @test !haskey(file, "noninteger_chunk")
+
+            # Declared dimensions must match both the array rank and any dimensions fixed
+            # by the element type. These errors should also precede destination creation.
+            @test_throws ArgumentError HDF5Vectors.create_hdf5_vector(
+                file["/"],
+                "noninteger_dimensions",
+                Vector{Float64};
+                dims = (2.0,),
+            )
+            @test_throws DimensionMismatch HDF5Vectors.create_hdf5_vector(
+                file["/"],
+                "wrong_static_dimensions",
+                StaticArrays.SVector{2, Float64};
+                dims = (3,),
+            )
+            @test !haskey(file, "noninteger_dimensions")
+            @test !haskey(file, "wrong_static_dimensions")
 
             # Bulk copying encodes every value before creating its destination. A later
             # dimension error therefore leaves no partially created vector group.
@@ -301,6 +331,17 @@ end
                 dims = (2,),
             )
             @test !haskey(file, "invalid_copy")
+
+            # A mismatched shape remains invalid even when Julia broadcasting could expand
+            # it to the declared dimensions.
+            broadcastable_source = [reshape([1.0, 2.0], 2, 1)]
+            @test_throws DimensionMismatch HDF5Vectors.copy_to_hdf5_vector(
+                file["/"],
+                "broadcastable_invalid_copy",
+                broadcastable_source;
+                dims = (2, 2),
+            )
+            @test !haskey(file, "broadcastable_invalid_copy")
 
             vector = HDF5Vectors.create_hdf5_vector(
                 file["/"],
@@ -314,7 +355,27 @@ end
             @test read(file["validated_push/metadata/count"]) == 1
             @test size(file["validated_push/data/values"]) == (2, 1)
 
-            # Names designate one immediate child of the supplied HDF5 group.
+            # The declared element type is an input contract. A rejected value or failed
+            # HDF5 write must not advance the logical count in memory.
+            scalar = HDF5Vectors.create_hdf5_vector(file["/"], "failed_scalar", Int64)
+            @test_throws MethodError push!(scalar, Int32(1))
+            @test isempty(scalar)
+            close(scalar.store.dataset)
+            @test_throws ErrorException push!(scalar, Int64(1))
+            @test isempty(scalar)
+
+            # The parent must be an HDF5 group, and names designate one immediate child of
+            # that group. AbstractString implementations remain valid names.
+            @test_throws MethodError HDF5Vectors.create_hdf5_vector(
+                file,
+                "file_parent",
+                Int64,
+            )
+            @test_throws MethodError HDF5Vectors.create_hdf5_vector(
+                file["/"],
+                :symbol_name,
+                Int64,
+            )
             @test_throws ArgumentError HDF5Vectors.create_hdf5_vector(
                 file["/"],
                 "nested/vector",
@@ -325,6 +386,14 @@ end
                 "validated_push",
                 Int64,
             )
+            full_name = "substring_name_suffix"
+            substring_name = SubString(full_name, 1, 14)
+            substring_vector = HDF5Vectors.copy_to_hdf5_vector(
+                file["/"],
+                substring_name,
+                Int64[1, 2],
+            )
+            @test collect(substring_vector) == Int64[1, 2]
 
             # The logical count and physical length must agree whenever the schema has a
             # physical length. Constant-only vectors are the intentional exception.

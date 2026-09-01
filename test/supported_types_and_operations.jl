@@ -1,118 +1,103 @@
-@enum ParityUInt8Enum::UInt8 parity_zero = 0 parity_max = 255
-@enum ParityInt64Enum::Int64 parity_low = -3_000_000_000 parity_high = 3_000_000_000
-@enum ParityInt128Enum::Int128 parity_int128 = 1
-EnumX.@enumx ParityUngulates parity_deer parity_horse parity_bison
+@enum SupportedUInt8Enum::UInt8 supported_zero = 0 supported_max = 255
+@enum SupportedInt64Enum::Int64 supported_low = -3_000_000_000 supported_high = 3_000_000_000
+@enum SupportedInt128Enum::Int128 supported_int128 = 1
+EnumX.@enumx SupportedUngulates supported_deer supported_horse supported_bison
 
-struct ParityPoint
+struct SupportedPoint
     x::Float64
     y::Int64
 end
 
-struct ParityNestedRecord
+struct SupportedNestedRecord
     direction::StaticArrays.SVector{3, Float64}
-    point::ParityPoint
+    point::SupportedPoint
 end
 
-struct ParityNonBitsRecord
+struct SupportedNonBitsRecord
     label::String
     values::Vector{Int64}
 end
 
-function Base.:(==)(first::ParityNonBitsRecord, second::ParityNonBitsRecord)
+function Base.:(==)(first::SupportedNonBitsRecord, second::SupportedNonBitsRecord)
     return first.label == second.label && first.values == second.values
 end
 
-struct ParityNonconcreteField
+struct SupportedNonconcreteField
     value::NamedTuple
 end
 
-abstract type ParityAbstractValue end
+abstract type SupportedAbstractValue end
 
-struct ParityIntegerValue <: ParityAbstractValue
+struct SupportedIntegerValue <: SupportedAbstractValue
     value::Int64
 end
 
-struct ParityStringValue <: ParityAbstractValue
+struct SupportedStringValue <: SupportedAbstractValue
     value::String
 end
 
-struct ParitySingleton
+struct SupportedSingleton
 end
 
-struct ParityUnconstructibleSingleton
-    ParityUnconstructibleSingleton(::Nothing) = new()
+struct SupportedUnconstructibleSingleton
+    SupportedUnconstructibleSingleton(::Nothing) = new()
 end
 
-struct ParitySingleton1{Value}
+struct SupportedSingleton1{Value}
 end
 
-struct ParitySingleton2{Value}
+struct SupportedSingleton2{Value}
 end
 
-mutable struct ParityMutableZeroField
+mutable struct SupportedMutableZeroField
 end
 
-function compare_hdf5_vector_implementations(
-    old_group,
-    new_group,
+function test_supported_collection(
+    group,
     name,
     source::Vector{T};
     kwargs...,
 ) where {T}
 
-    old_vector = HDF5Vectors.copy_baseline_to_hdf5_vector(
-        old_group,
-        name,
-        source;
-        chunk_length = 2,
-        kwargs...,
-    )
-    new_vector = HDF5Vectors2.copy_to_hdf5_vector(
-        new_group,
+    vector = HDF5Vectors.copy_to_hdf5_vector(
+        group,
         name,
         source;
         chunk_length = 2,
         kwargs...,
     )
 
-    # Both implementations should expose the same logical AbstractVector behavior even
-    # though their schemas and physical HDF5 layouts differ.
-    @test eltype(old_vector) === T
-    @test eltype(new_vector) === T
-    @test collect(old_vector) == source
-    @test collect(new_vector) == source
-    @test old_vector[:] == new_vector[:]
-    @test old_vector[1] == new_vector[1] == first(source)
+    # Every supported representation should expose the same logical AbstractVector
+    # behavior through the package's ordinary bulk-copy entry point.
+    @test eltype(vector) === T
+    @test collect(vector) == source
+    @test vector[:] == source
+    @test vector[1] == first(source)
     indices = 1:min(2, length(source))
-    @test old_vector[indices] == new_vector[indices] == source[indices]
-    @test old_vector[collect(indices)] == new_vector[collect(indices)] == source[indices]
+    @test vector[indices] == source[indices]
+    @test vector[collect(indices)] == source[indices]
     mask = [isodd(index) for index in eachindex(source)]
-    @test old_vector[mask] == new_vector[mask] == source[mask]
-    @test old_vector[BitVector(mask)] == new_vector[BitVector(mask)] == source[mask]
-    @test [value for value in old_vector] == [value for value in new_vector] == source
-    @test map(identity, old_vector) == map(identity, new_vector) == source
-    @test identity.(old_vector) == identity.(new_vector) == source
+    @test vector[mask] == source[mask]
+    @test vector[BitVector(mask)] == source[mask]
+    @test [value for value in vector] == source
+    @test map(identity, vector) == source
+    @test identity.(vector) == source
 
     # Loading without an explicit Julia type must recover the declared element type and
-    # permit the same subsequent append in both implementations.
-    old_loaded = HDF5Vectors.load_baseline_hdf5_vector(old_group[name])
-    new_loaded = HDF5Vectors2.load_hdf5_vector(new_group[name])
-    old_typed = HDF5Vectors.load_baseline_hdf5_vector(old_group[name], T)
-    new_typed = HDF5Vectors2.load_hdf5_vector(new_group[name], T)
-    @test eltype(old_loaded) === T
-    @test eltype(new_loaded) === T
-    @test collect(old_typed) == source
-    @test collect(new_typed) == source
-    push!(old_loaded, first(source))
-    push!(new_loaded, first(source))
+    # permit a subsequent append. Typed loading should recover the same values without
+    # deserializing inferred schema metadata.
+    loaded = HDF5Vectors.load_hdf5_vector(group[name])
+    typed = HDF5Vectors.load_hdf5_vector(group[name], T)
+    @test eltype(loaded) === T
+    @test collect(typed) == source
+    push!(loaded, first(source))
     expected = copy(source)
     push!(expected, first(source))
-    @test collect(old_loaded) == expected
-    @test collect(new_loaded) == expected
+    @test collect(loaded) == expected
 
 end
 
-function compare_elemental_types(old_group, new_group; portable)
+function test_scalar_types(group; portable)
 
     # Boundary values exercise every documented native integer width without permitting an
     # implementation to narrow the physical representation silently.
@@ -127,9 +112,8 @@ function compare_elemental_types(old_group, new_group; portable)
         UInt64,
     )
         source = type[typemin(type), zero(type), typemax(type)]
-        compare_hdf5_vector_implementations(
-            old_group,
-            new_group,
+        test_supported_collection(
+            group,
             lowercase(string(type)),
             source;
             portable,
@@ -143,17 +127,16 @@ function compare_elemental_types(old_group, new_group; portable)
         ("char", ['a', 'λ', 'z']),
         ("string", ["first", "second", "third"]),
         ("symbol", [:first, :second, :third]),
-        ("uint8_enum", [parity_zero, parity_max, parity_zero]),
-        ("int64_enum", [parity_low, parity_high, parity_low]),
+        ("uint8_enum", [supported_zero, supported_max, supported_zero]),
+        ("int64_enum", [supported_low, supported_high, supported_low]),
         (
             "enumx",
-            [ParityUngulates.parity_deer, ParityUngulates.parity_horse],
+            [SupportedUngulates.supported_deer, SupportedUngulates.supported_horse],
         ),
     )
     for (name, source) in cases
-        compare_hdf5_vector_implementations(
-            old_group,
-            new_group,
+        test_supported_collection(
+            group,
             name,
             source;
             portable,
@@ -162,7 +145,7 @@ function compare_elemental_types(old_group, new_group; portable)
 
 end
 
-function compare_array_types(old_group, new_group; portable)
+function test_array_types(group; portable)
 
     # Fixed-size tuples and static arrays infer their dimensions from their types. These
     # cases cover ranks one through three and transformed scalar element codecs.
@@ -194,8 +177,8 @@ function compare_array_types(old_group, new_group; portable)
         (
             "enum_svectors",
             [
-                StaticArrays.SVector(parity_zero, parity_max),
-                StaticArrays.SVector(parity_max, parity_zero),
+                StaticArrays.SVector(supported_zero, supported_max),
+                StaticArrays.SVector(supported_max, supported_zero),
             ],
         ),
         (
@@ -204,9 +187,8 @@ function compare_array_types(old_group, new_group; portable)
         ),
     )
     for (name, source) in fixed_cases
-        compare_hdf5_vector_implementations(
-            old_group,
-            new_group,
+        test_supported_collection(
+            group,
             name,
             source;
             portable,
@@ -236,9 +218,8 @@ function compare_array_types(old_group, new_group; portable)
         ),
     )
     for (name, source, options) in dynamic_cases
-        compare_hdf5_vector_implementations(
-            old_group,
-            new_group,
+        test_supported_collection(
+            group,
             name,
             source;
             portable,
@@ -248,15 +229,15 @@ function compare_array_types(old_group, new_group; portable)
 
 end
 
-function compare_constant_types(old_group, new_group; portable)
+function test_constant_types(group; portable)
 
-    singleton_tuple = (ParitySingleton1{:a}(), ParitySingleton2{:b}())
+    singleton_tuple = (SupportedSingleton1{:a}(), SupportedSingleton2{:b}())
     cases = (
         ("empty_tuples", [(), ()]),
         ("empty_named_tuples", [(;), (;)]),
         ("nothings", Nothing[nothing, nothing]),
         ("vals", [Val(:ready), Val(:ready)]),
-        ("singletons", [ParitySingleton(), ParitySingleton()]),
+        ("singletons", [SupportedSingleton(), SupportedSingleton()]),
         ("singleton_records", fill(singleton_tuple, 2)),
         (
             "empty_svectors",
@@ -281,9 +262,8 @@ function compare_constant_types(old_group, new_group; portable)
         ),
     )
     for (name, source) in cases
-        compare_hdf5_vector_implementations(
-            old_group,
-            new_group,
+        test_supported_collection(
+            group,
             name,
             source;
             portable,
@@ -292,9 +272,9 @@ function compare_constant_types(old_group, new_group; portable)
 
 end
 
-function compare_record_types(old_group, new_group; portable)
+function test_record_types(group; portable)
 
-    singleton_tuple = (ParitySingleton1{:a}(), ParitySingleton2{:b}())
+    singleton_tuple = (SupportedSingleton1{:a}(), SupportedSingleton2{:b}())
     cases = (
         ("complex", ComplexF64[1 + 2im, 3 + 4im]),
         ("rationals", Rational{Int64}[1 // 2, 3 // 4]),
@@ -309,48 +289,81 @@ function compare_record_types(old_group, new_group; portable)
             "tuples_with_strings",
             [("first", (a = 1.0, b = Int64(2))), ("second", (a = 3.0, b = Int64(4)))],
         ),
-        ("points", [ParityPoint(1.0, 2), ParityPoint(3.0, 4)]),
+        ("points", [SupportedPoint(1.0, 2), SupportedPoint(3.0, 4)]),
         (
             "nested_records",
             [
-                ParityNestedRecord(
+                SupportedNestedRecord(
                     StaticArrays.SVector(1.0, 2.0, 3.0),
-                    ParityPoint(4.0, 5),
+                    SupportedPoint(4.0, 5),
                 ),
-                ParityNestedRecord(
+                SupportedNestedRecord(
                     StaticArrays.SVector(6.0, 7.0, 8.0),
-                    ParityPoint(9.0, 10),
+                    SupportedPoint(9.0, 10),
                 ),
             ],
         ),
         (
             "nonbits_records",
             [
-                ParityNonBitsRecord("first", [1, 2]),
-                ParityNonBitsRecord("second", [3]),
+                SupportedNonBitsRecord("first", [1, 2]),
+                SupportedNonBitsRecord("second", [3]),
             ],
         ),
         ("singleton_tuple_records", fill(singleton_tuple, 2)),
         (
             "static_record_arrays",
             [
-                StaticArrays.SVector(ParityPoint(1.0, 2), ParityPoint(3.0, 4)),
-                StaticArrays.SVector(ParityPoint(5.0, 6), ParityPoint(7.0, 8)),
+                StaticArrays.SVector(SupportedPoint(1.0, 2), SupportedPoint(3.0, 4)),
+                StaticArrays.SVector(SupportedPoint(5.0, 6), SupportedPoint(7.0, 8)),
+            ],
+        ),
+        (
+            "static_record_matrices",
+            [
+                StaticArrays.SMatrix{2, 2}(
+                    SupportedPoint(1.0, 2),
+                    SupportedPoint(3.0, 4),
+                    SupportedPoint(5.0, 6),
+                    SupportedPoint(7.0, 8),
+                ),
+                StaticArrays.SMatrix{2, 2}(
+                    SupportedPoint(9.0, 10),
+                    SupportedPoint(11.0, 12),
+                    SupportedPoint(13.0, 14),
+                    SupportedPoint(15.0, 16),
+                ),
+            ],
+        ),
+        (
+            "static_record_arrays_rank_three",
+            [
+                StaticArrays.SArray{Tuple{2, 1, 2}}(
+                    SupportedPoint(1.0, 2),
+                    SupportedPoint(3.0, 4),
+                    SupportedPoint(5.0, 6),
+                    SupportedPoint(7.0, 8),
+                ),
+                StaticArrays.SArray{Tuple{2, 1, 2}}(
+                    SupportedPoint(9.0, 10),
+                    SupportedPoint(11.0, 12),
+                    SupportedPoint(13.0, 14),
+                    SupportedPoint(15.0, 16),
+                ),
             ],
         ),
         (
             "nonconcrete_fields",
-            [ParityNonconcreteField((a = 1,)), ParityNonconcreteField((b = "two",))],
+            [SupportedNonconcreteField((a = 1,)), SupportedNonconcreteField((b = "two",))],
         ),
         (
             "abstract_values",
-            ParityAbstractValue[ParityIntegerValue(1), ParityStringValue("two")],
+            SupportedAbstractValue[SupportedIntegerValue(1), SupportedStringValue("two")],
         ),
     )
     for (name, source) in cases
-        compare_hdf5_vector_implementations(
-            old_group,
-            new_group,
+        test_supported_collection(
+            group,
             name,
             source;
             portable,
@@ -359,21 +372,19 @@ function compare_record_types(old_group, new_group; portable)
 
 end
 
-@testset "HDF5Vectors implementation comparison" begin
+@testset "HDF5Vectors supported types and operations" begin
 
     mktempdir() do directory
 
         for portable in (true, false)
 
-            path = joinpath(directory, "comparison_$portable.h5")
+            path = joinpath(directory, "supported_types_$portable.h5")
             HDF5.h5open(path, "w") do file
 
-                old_group = HDF5.create_group(file, "old")
-                new_group = HDF5.create_group(file, "new")
-                compare_elemental_types(old_group, new_group; portable)
-                compare_array_types(old_group, new_group; portable)
-                compare_constant_types(old_group, new_group; portable)
-                compare_record_types(old_group, new_group; portable)
+                test_scalar_types(file["/"]; portable)
+                test_array_types(file["/"]; portable)
+                test_constant_types(file["/"]; portable)
+                test_record_types(file["/"]; portable)
 
             end
 
@@ -383,36 +394,28 @@ end
 
 end
 
-@testset "HDF5Vectors shared unsupported types" begin
+@testset "HDF5Vectors unsupported types" begin
 
     mktempdir() do directory
 
-        HDF5.h5open(joinpath(directory, "unsupported_comparison.h5"), "w") do file
+        HDF5.h5open(joinpath(directory, "unsupported_types.h5"), "w") do file
 
-            old_group = HDF5.create_group(file, "old")
-            new_group = HDF5.create_group(file, "new")
             unsupported_types = (
                 Float16,
                 Int128,
                 UInt128,
-                ParityInt128Enum,
-                ParityUnconstructibleSingleton,
-                ParityMutableZeroField,
+                SupportedInt128Enum,
+                SupportedUnconstructibleSingleton,
+                SupportedMutableZeroField,
             )
             for (index, type) in enumerate(unsupported_types)
                 name = "unsupported_$index"
-                @test_throws ArgumentError HDF5Vectors.create_baseline_hdf5_vector(
-                    old_group,
+                @test_throws ArgumentError HDF5Vectors.create_hdf5_vector(
+                    file["/"],
                     name,
                     type,
                 )
-                @test_throws ArgumentError HDF5Vectors2.create_hdf5_vector(
-                    new_group,
-                    name,
-                    type,
-                )
-                @test !haskey(old_group, name)
-                @test !haskey(new_group, name)
+                @test !haskey(file, name)
             end
 
         end
