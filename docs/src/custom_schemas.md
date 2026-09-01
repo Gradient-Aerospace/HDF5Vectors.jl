@@ -4,7 +4,7 @@
 CurrentModule = HDF5Vectors
 ```
 
-A codec should be preferred whenever a new logical type can reuse scalar, dense, record, blob, or constant storage. A new schema is appropriate only when the physical HDF5 representation itself must change—for example, a package might add a ragged numeric-array representation with one numeric dataset and one offset dataset.
+A codec should be preferred whenever a new logical type can reuse scalar, dense, record, blob, or constant storage. A new schema is appropriate only when the physical HDF5 representation itself must change. For example, a package might add a ragged numeric-array representation with one numeric dataset and one offset dataset.
 
 This interface is intended primarily for package authors. Application code continues to use [`create_hdf5_vector`](@ref), [`copy_to_hdf5_vector`](@ref), and [`load_hdf5_vector`](@ref).
 

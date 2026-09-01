@@ -123,7 +123,6 @@ The default record codec reads a struct's fields and calls its constructor with 
 struct PointFromTuple
     x::Float64
     y::Float64
-
     PointFromTuple(values::Tuple{Float64, Float64}) = new(values...)
 end
 
