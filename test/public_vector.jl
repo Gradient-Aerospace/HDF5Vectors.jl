@@ -5,7 +5,7 @@ function test_public_hdf5_vector(
     kwargs...,
 ) where {T}
 
-    vector = HDF5Vectors2.create_hdf5_vector(
+    vector = HDF5Vectors.create_hdf5_vector(
         file["/"],
         name,
         T;
@@ -18,7 +18,7 @@ function test_public_hdf5_vector(
 
     # The prototype presents the ordinary one-dimensional array behavior needed by logging
     # and analysis code, while range reads and collection use one recursive bulk read.
-    @test vector isa HDF5Vectors2.HDF5Vector{T}
+    @test vector isa HDF5Vectors.HDF5Vector{T}
     @test eltype(vector) === T
     @test length(vector) == length(source)
     @test size(vector) == (length(source),)
@@ -49,12 +49,12 @@ function test_public_hdf5_vector(
         @test vector[BitVector(mask)] == source[BitVector(mask)]
     end
 
-    loaded = HDF5Vectors2.load_hdf5_vector(file[name])
-    loaded_with_type = HDF5Vectors2.load_hdf5_vector(file[name], T)
+    loaded = HDF5Vectors.load_hdf5_vector(file[name])
+    loaded_with_type = HDF5Vectors.load_hdf5_vector(file[name], T)
     @test collect(loaded) == source
     @test collect(loaded_with_type) == source
 
-    copied = HDF5Vectors2.copy_to_hdf5_vector(
+    copied = HDF5Vectors.copy_to_hdf5_vector(
         file["/"],
         name * "_copy",
         source;
@@ -62,7 +62,7 @@ function test_public_hdf5_vector(
         kwargs...,
     )
     @test collect(copied) == source
-    reloaded_copy = HDF5Vectors2.load_hdf5_vector(file[name * "_copy"])
+    reloaded_copy = HDF5Vectors.load_hdf5_vector(file[name * "_copy"])
     @test collect(reloaded_copy) == source
 
     # A loaded vector has validated its physical layout and can continue appending from
@@ -77,7 +77,7 @@ function test_public_hdf5_vector(
 
 end
 
-@testset "HDF5Vectors public calls use HDF5Vectors2" begin
+@testset "HDF5Vectors public interface" begin
 
     # The package exports only the ordinary vector interface. Schema and codec extension
     # points remain public, but callers access those specialized names explicitly. Julia
@@ -93,9 +93,6 @@ end
         :load_hdf5_vector,
         :copy_to_hdf5_vector,
     ))
-    @test Base.ispublic(HDF5Vectors, :AbstractHDF5Vector)
-    @test Base.ispublic(HDF5Vectors, :iterable)
-
     for name in (
         :AbstractCodec,
         :AbstractRecordCodec,
@@ -114,26 +111,23 @@ end
         :write_schema,
         :read_schema,
     )
-        @test Base.ispublic(HDF5Vectors2, name)
+        @test Base.ispublic(HDF5Vectors, name)
     end
 
     mktempdir() do directory
 
         HDF5.h5open(joinpath(directory, "public_routing.h5"), "w") do file
 
-            # Downstream packages call the parent module, so these checks exercise that
-            # route rather than invoking the prototype submodule directly. The returned
-            # vector retains the established abstract supertype and its shared conveniences.
+            # The ordinary creation path returns the package's one concrete vector type and
+            # supports standard AbstractVector operations directly.
             vector = HDF5Vectors.create_hdf5_vector(file["/"], "pushed", Int64)
             @test vector isa HDF5Vectors.HDF5Vector{Int64}
-            @test vector isa HDF5Vectors.AbstractHDF5Vector{Int64}
-            @test HDF5Vectors.HDF5Vector === HDF5Vectors2.HDF5Vector
             push!(vector, 1)
             push!(vector, 2)
-            @test collect(HDF5Vectors.iterable(vector)) == Int64[1, 2]
+            @test collect(vector) == Int64[1, 2]
 
-            # Copying and both loading forms should return the replacement type and use
-            # its versioned schema metadata.
+            # Copying and both loading forms should return HDF5Vector and use its versioned
+            # schema metadata.
             source = [PrototypePoint(1.0, 2), PrototypePoint(3.0, 4)]
             copied = HDF5Vectors.copy_to_hdf5_vector(
                 file["/"],
@@ -141,14 +135,14 @@ end
                 source,
             )
             @test copied isa HDF5Vectors.HDF5Vector{PrototypePoint}
-            @test read(file["copied/metadata/format_name"]) == "HDF5Vectors2"
+            @test read(file["copied/metadata/format_name"]) == "HDF5Vectors"
             @test collect(HDF5Vectors.load_hdf5_vector(file["copied"])) == source
             @test collect(
                 HDF5Vectors.load_hdf5_vector(file["copied"], PrototypePoint),
             ) == source
 
-            # An explicit schema is part of the replacement's extension interface and is
-            # also accepted through the parent module during downstream evaluation.
+            # Explicit schemas use the same public creation and loading functions as
+            # inferred schemas.
             schema = infer_schema(PrototypeGrade)
             explicit = HDF5Vectors.create_hdf5_vector(
                 file["/"],
@@ -167,7 +161,7 @@ end
 
 end
 
-@testset "HDF5Vectors2 public vector operations" begin
+@testset "HDF5Vectors public vector operations" begin
 
     mktempdir() do directory
 
@@ -258,14 +252,14 @@ end
                 PrototypePoint;
                 policy = SchemaPolicy(; portable = false),
             )
-            explicit = HDF5Vectors2.create_hdf5_vector(
+            explicit = HDF5Vectors.create_hdf5_vector(
                 file["/"],
                 "explicit_schema",
                 native_schema;
                 chunk_length = 2,
             )
             push!(explicit, PrototypePoint(1.0, 2))
-            @test collect(HDF5Vectors2.load_hdf5_vector(file["explicit_schema"])) ==
+            @test collect(HDF5Vectors.load_hdf5_vector(file["explicit_schema"])) ==
                 [PrototypePoint(1.0, 2)]
 
         end
@@ -274,7 +268,7 @@ end
 
 end
 
-@testset "HDF5Vectors2 public vector validation" begin
+@testset "HDF5Vectors public vector validation" begin
 
     mktempdir() do directory
 
@@ -282,14 +276,14 @@ end
 
             # Chunk length is a vector-creation option rather than an independent store
             # concern. Both public creation paths reject it before making a destination.
-            @test_throws ArgumentError HDF5Vectors2.create_hdf5_vector(
+            @test_throws ArgumentError HDF5Vectors.create_hdf5_vector(
                 file["/"],
                 "invalid_create_chunk",
                 Int64;
                 chunk_length = 0,
             )
             @test !haskey(file, "invalid_create_chunk")
-            @test_throws ArgumentError HDF5Vectors2.copy_to_hdf5_vector(
+            @test_throws ArgumentError HDF5Vectors.copy_to_hdf5_vector(
                 file["/"],
                 "invalid_copy_chunk",
                 Int64[1];
@@ -300,7 +294,7 @@ end
             # Bulk copying encodes every value before creating its destination. A later
             # dimension error therefore leaves no partially created vector group.
             invalid_source = [[1.0, 2.0], [3.0]]
-            @test_throws DimensionMismatch HDF5Vectors2.copy_to_hdf5_vector(
+            @test_throws DimensionMismatch HDF5Vectors.copy_to_hdf5_vector(
                 file["/"],
                 "invalid_copy",
                 invalid_source;
@@ -308,7 +302,7 @@ end
             )
             @test !haskey(file, "invalid_copy")
 
-            vector = HDF5Vectors2.create_hdf5_vector(
+            vector = HDF5Vectors.create_hdf5_vector(
                 file["/"],
                 "validated_push",
                 Vector{Float64};
@@ -321,12 +315,12 @@ end
             @test size(file["validated_push/data/values"]) == (2, 1)
 
             # Names designate one immediate child of the supplied HDF5 group.
-            @test_throws ArgumentError HDF5Vectors2.create_hdf5_vector(
+            @test_throws ArgumentError HDF5Vectors.create_hdf5_vector(
                 file["/"],
                 "nested/vector",
                 Int64,
             )
-            @test_throws ArgumentError HDF5Vectors2.create_hdf5_vector(
+            @test_throws ArgumentError HDF5Vectors.create_hdf5_vector(
                 file["/"],
                 "validated_push",
                 Int64,
@@ -334,17 +328,17 @@ end
 
             # The logical count and physical length must agree whenever the schema has a
             # physical length. Constant-only vectors are the intentional exception.
-            mismatched = HDF5Vectors2.copy_to_hdf5_vector(
+            mismatched = HDF5Vectors.copy_to_hdf5_vector(
                 file["/"],
                 "mismatched_count",
                 Int64[1, 2],
             )
             write(mismatched.count_dataset, Int64(1))
-            @test_throws DimensionMismatch HDF5Vectors2.load_hdf5_vector(
+            @test_throws DimensionMismatch HDF5Vectors.load_hdf5_vector(
                 file["mismatched_count"],
             )
 
-            invalid_count = HDF5Vectors2.copy_to_hdf5_vector(
+            invalid_count = HDF5Vectors.copy_to_hdf5_vector(
                 file["/"],
                 "invalid_count",
                 Int64[1],
@@ -353,7 +347,7 @@ end
             close(count_dataset)
             HDF5.delete_object(file["invalid_count/metadata"], "count")
             file["invalid_count/metadata/count"] = Float64(1)
-            @test_throws ArgumentError HDF5Vectors2.load_hdf5_vector(
+            @test_throws ArgumentError HDF5Vectors.load_hdf5_vector(
                 file["invalid_count"],
             )
 

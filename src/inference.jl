@@ -40,7 +40,7 @@ struct SchemaContext{D}
 end
 
 function unsupported_schema(type, reason)
-    throw(ArgumentError("HDF5Vectors2 cannot infer a schema for $type: $reason"))
+    throw(ArgumentError("HDF5Vectors cannot infer a schema for $type: $reason"))
 end
 
 function validate_dims(dims, expected_rank)
@@ -80,10 +80,10 @@ dense element type.
 For example, a `Grade` stored as one `UInt8` needs only a codec and this selection method:
 
 ```julia
-struct GradeCodec <: HDF5Vectors2.AbstractCodec{Grade, UInt8} end
+struct GradeCodec <: HDF5Vectors.AbstractCodec{Grade, UInt8} end
 
-HDF5Vectors2.infer_schema(::Type{Grade}; kwargs...) =
-    HDF5Vectors2.ScalarSchema(GradeCodec())
+HDF5Vectors.infer_schema(::Type{Grade}; kwargs...) =
+    HDF5Vectors.ScalarSchema(GradeCodec())
 ```
 
 The codec implements [`encode_value`](@ref) and [`decode_value`](@ref). Its concrete type is

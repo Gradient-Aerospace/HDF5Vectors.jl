@@ -1,4 +1,4 @@
-@testset "HDF5Vectors2 stored schemas" begin
+@testset "HDF5Vectors stored schemas" begin
 
     mktempdir() do directory
 
@@ -62,7 +62,7 @@
             # The schema tree is stored in ordinary HDF5 values so readers can inspect the
             # selected representation without understanding Julia's serialized type data.
             metadata = file["record/metadata"]
-            @test read(metadata["format_name"]) == "HDF5Vectors2"
+            @test read(metadata["format_name"]) == "HDF5Vectors"
             @test read(metadata["format_version"]) == 1
             @test read(metadata["schema/kind"]) == "record"
             @test read(metadata["schema/field_names"]) == ["x", "y"]
@@ -74,7 +74,7 @@
             # recover this application codec without HDF5Vectors knowing its identifier.
             application_metadata = file["application_codec/metadata"]
             @test read(application_metadata["schema/codec"]) ==
-                HDF5Vectors2.codec_identifier(PrototypeGradeCodec())
+                HDF5Vectors.codec_identifier(PrototypeGradeCodec())
             @test read_schema(file["application_codec"]).codec isa PrototypeGradeCodec
             @test read_schema(
                 file["application_codec"],
@@ -96,7 +96,7 @@
 
 end
 
-@testset "HDF5Vectors2 stored schema validation" begin
+@testset "HDF5Vectors stored schema validation" begin
 
     mktempdir() do directory
 

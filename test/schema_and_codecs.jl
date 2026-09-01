@@ -45,15 +45,15 @@ end
 
 struct PrototypeGradeCodec <: AbstractCodec{PrototypeGrade, UInt8} end
 
-function HDF5Vectors2.encode_value(::PrototypeGradeCodec, grade::PrototypeGrade)
+function HDF5Vectors.encode_value(::PrototypeGradeCodec, grade::PrototypeGrade)
     return UInt8(only(grade.label))
 end
 
-function HDF5Vectors2.decode_value(::PrototypeGradeCodec, value::UInt8)
+function HDF5Vectors.decode_value(::PrototypeGradeCodec, value::UInt8)
     return PrototypeGrade(string(Char(value)))
 end
 
-function HDF5Vectors2.infer_schema(::Type{PrototypeGrade}; kwargs...)
+function HDF5Vectors.infer_schema(::Type{PrototypeGrade}; kwargs...)
     return ScalarSchema(PrototypeGradeCodec())
 end
 
@@ -71,7 +71,7 @@ end
 
 JSON3.StructTypes.StructType(::Type{PrototypeJSONValue}) = JSON3.StructTypes.Struct()
 
-function HDF5Vectors2.infer_schema(::Type{PrototypeJSONValue}; kwargs...)
+function HDF5Vectors.infer_schema(::Type{PrototypeJSONValue}; kwargs...)
     return json_schema(PrototypeJSONValue)
 end
 
@@ -94,7 +94,7 @@ function test_schema_round_trip(schema, value)
     @test decode_value(schema, encoded) == value
 end
 
-@testset "HDF5Vectors2 schema inference" begin
+@testset "HDF5Vectors schema inference" begin
 
     @testset "scalar schemas" begin
 
@@ -120,8 +120,8 @@ end
         # batch conversion deliberately returns the same object rather than copying it into
         # a second vector before a bulk write or after a bulk read.
         float_values = Float64[1.0, 2.0, 3.0]
-        @test HDF5Vectors2.encode_batch(float_schema, float_values) === float_values
-        @test HDF5Vectors2.decode_batch(float_schema, float_values) === float_values
+        @test HDF5Vectors.encode_batch(float_schema, float_values) === float_values
+        @test HDF5Vectors.decode_batch(float_schema, float_values) === float_values
 
         # An application codec reaches the same scalar representation through public
         # dispatch. HDF5Vectors does not need a codec-name method or a matching reader.
@@ -171,14 +171,14 @@ end
             StaticArrays.SVector(prototype_zero, prototype_max),
             StaticArrays.SVector(prototype_max, prototype_zero),
         ]
-        static_batch = HDF5Vectors2.encode_batch(static_schema, static_values)
+        static_batch = HDF5Vectors.encode_batch(static_schema, static_values)
         char_values = [('a', 'b'), ('c', 'd')]
-        char_batch = HDF5Vectors2.encode_batch(tuple_schema, char_values)
+        char_batch = HDF5Vectors.encode_batch(tuple_schema, char_values)
 
         @test static_batch == UInt8[0 255; 255 0]
         @test char_batch == Int32['a' 'c'; 'b' 'd']
-        @test HDF5Vectors2.decode_batch(static_schema, static_batch) == static_values
-        @test HDF5Vectors2.decode_batch(tuple_schema, char_batch) == char_values
+        @test HDF5Vectors.decode_batch(static_schema, static_batch) == static_values
+        @test HDF5Vectors.decode_batch(tuple_schema, char_batch) == char_values
 
         # Non-bits static arrays cannot use the contiguous reinterpretation fast path, but
         # they retain the same dense batch interface through frame-by-frame reconstruction.
@@ -186,18 +186,18 @@ end
             StaticArrays.SVector("first", "second"),
             StaticArrays.SVector("third", "fourth"),
         ]
-        string_static_batch = HDF5Vectors2.encode_batch(
+        string_static_batch = HDF5Vectors.encode_batch(
             string_static_schema,
             string_static_values,
         )
-        @test HDF5Vectors2.decode_batch(
+        @test HDF5Vectors.decode_batch(
             string_static_schema,
             string_static_batch,
         ) == string_static_values
 
         @test_throws DimensionMismatch encode_value(array_schema, ['a'])
         @test_throws DimensionMismatch decode_value(array_schema, Int32[Int('a')])
-        @test_throws DimensionMismatch HDF5Vectors2.decode_batch(
+        @test_throws DimensionMismatch HDF5Vectors.decode_batch(
             static_schema,
             zeros(UInt8, 3, 2),
         )
@@ -254,14 +254,14 @@ end
             sample,
             PrototypeSample(PrototypePoint(5.0, 6), :other, [7.0]),
         ]
-        sample_batch = HDF5Vectors2.encode_batch(sample_schema, samples)
+        sample_batch = HDF5Vectors.encode_batch(sample_schema, samples)
 
-        @test sample_batch isa HDF5Vectors2.RecordBatch
+        @test sample_batch isa HDF5Vectors.RecordBatch
         @test sample_batch.count == length(samples)
-        @test sample_batch.columns[1] isa HDF5Vectors2.RecordBatch
+        @test sample_batch.columns[1] isa HDF5Vectors.RecordBatch
         @test sample_batch.columns[2] == ["sample", "other"]
         @test length(sample_batch.columns[3]) == length(samples)
-        @test HDF5Vectors2.decode_batch(sample_schema, sample_batch) == samples
+        @test HDF5Vectors.decode_batch(sample_schema, sample_batch) == samples
 
         # A non-portable, nonzero-size bits record may use one native HDF5 datatype. This is
         # an inference policy; later storage operations simply execute the selected schema.

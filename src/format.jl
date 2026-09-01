@@ -2,7 +2,7 @@
 # Stored Schema Format  #
 #########################
 
-const format_name = "HDF5Vectors2"
+const format_name = "HDF5Vectors"
 const format_version = Int64(1)
 
 # Schema metadata has two complementary forms. The ordinary HDF5 tree describes every
@@ -190,7 +190,7 @@ function validate_format(metadata_group::HDF5.Group)
     stored_version = Int64(read(metadata_group["format_version"]))
     if stored_version != format_version
         throw(ArgumentError(
-            "HDF5Vectors2 does not support schema format version $stored_version; " *
+            "HDF5Vectors does not support schema format version $stored_version; " *
             "this implementation reads version $format_version.",
         ))
     end

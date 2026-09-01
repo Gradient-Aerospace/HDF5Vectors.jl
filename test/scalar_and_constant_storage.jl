@@ -1,4 +1,4 @@
-@testset "HDF5Vectors2 scalar storage" begin
+@testset "HDF5Vectors scalar storage" begin
 
     mktempdir() do directory
 
@@ -30,24 +30,24 @@
                 vector_group = HDF5.create_group(file, name)
                 write_schema(vector_group, schema)
                 data_group = HDF5.create_group(vector_group, "data")
-                store = HDF5Vectors2.create_store(
+                store = HDF5Vectors.create_store(
                     data_group,
                     schema;
                     chunk_length = 2,
                 )
 
                 initial_values = values[1:(end - 1)]
-                initial_encoded = HDF5Vectors2.encode_batch(schema, initial_values)
-                HDF5Vectors2.initialize_encoded!(store, initial_encoded)
+                initial_encoded = HDF5Vectors.encode_batch(schema, initial_values)
+                HDF5Vectors.initialize_encoded!(store, initial_encoded)
                 final_encoded = encode_value(schema, last(values))
-                HDF5Vectors2.append_encoded!(store, length(values), final_encoded)
+                HDF5Vectors.append_encoded!(store, length(values), final_encoded)
 
-                @test HDF5Vectors2.physical_length(store) == length(values)
-                first_encoded = HDF5Vectors2.read_encoded(store, 1)
+                @test HDF5Vectors.physical_length(store) == length(values)
+                first_encoded = HDF5Vectors.read_encoded(store, 1)
                 @test decode_value(schema, first_encoded) == first(values)
-                encoded = HDF5Vectors2.read_encoded_batch(store, 1:length(values))
-                @test HDF5Vectors2.decode_batch(schema, encoded) == values
-                @test HDF5Vectors2.dataset_matches_encoded_type(
+                encoded = HDF5Vectors.read_encoded_batch(store, 1:length(values))
+                @test HDF5Vectors.decode_batch(schema, encoded) == values
+                @test HDF5Vectors.dataset_matches_encoded_type(
                     data_group["values"],
                     encoded_type(schema),
                 )
@@ -55,8 +55,8 @@
                 # Opening uses the schema that was recovered from metadata and validates the
                 # physical dataset before returning a store.
                 loaded_schema = read_schema(vector_group)
-                loaded_store = HDF5Vectors2.open_store(data_group, loaded_schema)
-                @test HDF5Vectors2.physical_length(loaded_store) == length(values)
+                loaded_store = HDF5Vectors.open_store(data_group, loaded_schema)
+                @test HDF5Vectors.physical_length(loaded_store) == length(values)
 
             end
 
@@ -70,7 +70,7 @@
 
 end
 
-@testset "HDF5Vectors2 scalar validation" begin
+@testset "HDF5Vectors scalar validation" begin
 
     mktempdir() do directory
 
@@ -81,14 +81,14 @@ end
             # this lower-level store is constructed.
             schema = infer_schema(Int64)
             data_group = HDF5.create_group(file, "data")
-            store = HDF5Vectors2.create_store(data_group, schema; chunk_length = 2)
-            HDF5Vectors2.initialize_encoded!(store, Int64[])
-            @test iszero(HDF5Vectors2.physical_length(store))
+            store = HDF5Vectors.create_store(data_group, schema; chunk_length = 2)
+            HDF5Vectors.initialize_encoded!(store, Int64[])
+            @test iszero(HDF5Vectors.physical_length(store))
 
             # Opening rejects a physical datatype that disagrees with the stored schema.
             invalid_group = HDF5.create_group(file, "invalid_type")
             invalid_group["values"] = Float64[]
-            @test_throws ArgumentError HDF5Vectors2.open_store(invalid_group, schema)
+            @test_throws ArgumentError HDF5Vectors.open_store(invalid_group, schema)
 
         end
 
@@ -96,7 +96,7 @@ end
 
 end
 
-@testset "HDF5Vectors2 constant storage" begin
+@testset "HDF5Vectors constant storage" begin
 
     mktempdir() do directory
 
@@ -116,23 +116,23 @@ end
                 vector_group = HDF5.create_group(file, name)
                 write_schema(vector_group, schema)
                 data_group = HDF5.create_group(vector_group, "data")
-                store = HDF5Vectors2.create_store(
+                store = HDF5Vectors.create_store(
                     data_group,
                     schema;
                     chunk_length = 2,
                 )
 
-                HDF5Vectors2.initialize_encoded!(store, fill(nothing, 2))
+                HDF5Vectors.initialize_encoded!(store, fill(nothing, 2))
                 encoded = encode_value(schema, value)
-                HDF5Vectors2.append_encoded!(store, 3, encoded)
+                HDF5Vectors.append_encoded!(store, 3, encoded)
                 @test isempty(keys(data_group))
-                @test isnothing(HDF5Vectors2.physical_length(store))
-                @test decode_value(schema, HDF5Vectors2.read_encoded(store, 1)) == value
+                @test isnothing(HDF5Vectors.physical_length(store))
+                @test decode_value(schema, HDF5Vectors.read_encoded(store, 1)) == value
 
                 loaded_schema = read_schema(vector_group)
-                loaded_store = HDF5Vectors2.open_store(data_group, loaded_schema)
-                loaded = HDF5Vectors2.read_encoded_batch(loaded_store, 1:3)
-                decoded = HDF5Vectors2.decode_batch(loaded_schema, loaded)
+                loaded_store = HDF5Vectors.open_store(data_group, loaded_schema)
+                loaded = HDF5Vectors.read_encoded_batch(loaded_store, 1:3)
+                decoded = HDF5Vectors.decode_batch(loaded_schema, loaded)
                 @test decoded == fill(value, 3)
 
             end
