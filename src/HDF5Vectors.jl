@@ -26,8 +26,9 @@ memory and is generally faster when the vector fits in RAM.
 """
 module HDF5Vectors
 
-export AbstractHDF5Vector, HDF5Vector
-export create_hdf5_vector, load_hdf5_vector, copy_to_hdf5_vector, iterable
+export HDF5Vector, create_hdf5_vector, load_hdf5_vector, copy_to_hdf5_vector
+
+public AbstractHDF5Vector, iterable
 
 using HDF5
 using StaticArrays: StaticArray, SVector

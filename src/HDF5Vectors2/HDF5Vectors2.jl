@@ -17,13 +17,14 @@ include("representations/dense.jl")
 include("representations/record.jl")
 include("vector.jl")
 
-export AbstractCodec, AbstractRecordCodec, AbstractSchema
-export ScalarSchema, DenseSchema, RecordSchema, BlobSchema, ConstantSchema
-export IdentityCodec, CharCodec, SymbolCodec, EnumCodec, JSONCodec, SerializationCodec
-export StructCodec, TupleCodec, NamedTupleCodec, StaticArrayCodec, ConstantCodec
-export SchemaPolicy, infer_schema, json_schema, serialization_schema
-export logical_type, encoded_type, encode_value, decode_value
-export codec_identifier, schema_identifier, write_schema, read_schema
 export HDF5Vector, create_hdf5_vector, load_hdf5_vector, copy_to_hdf5_vector
+
+public AbstractCodec, AbstractRecordCodec, AbstractSchema
+public ScalarSchema, DenseSchema, RecordSchema, BlobSchema, ConstantSchema
+public IdentityCodec, CharCodec, SymbolCodec, EnumCodec, JSONCodec, SerializationCodec
+public StructCodec, TupleCodec, NamedTupleCodec, StaticArrayCodec, ConstantCodec
+public SchemaPolicy, infer_schema, json_schema, serialization_schema
+public logical_type, encoded_type, encode_value, decode_value
+public codec_identifier, schema_identifier, write_schema, read_schema
 
 end # module HDF5Vectors2

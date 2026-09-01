@@ -79,6 +79,44 @@ end
 
 @testset "HDF5Vectors public calls use HDF5Vectors2" begin
 
+    # The package exports only the ordinary vector interface. Schema and codec extension
+    # points remain public, but callers access those specialized names explicitly. Julia
+    # implicitly exports a module's own name, which is not part of this declared API list.
+    exported_names = Set(
+        name for name in names(HDF5Vectors; all = true)
+        if Base.isexported(HDF5Vectors, name)
+    )
+    delete!(exported_names, nameof(HDF5Vectors))
+    @test exported_names == Set((
+        :HDF5Vector,
+        :create_hdf5_vector,
+        :load_hdf5_vector,
+        :copy_to_hdf5_vector,
+    ))
+    @test Base.ispublic(HDF5Vectors, :AbstractHDF5Vector)
+    @test Base.ispublic(HDF5Vectors, :iterable)
+
+    for name in (
+        :AbstractCodec,
+        :AbstractRecordCodec,
+        :AbstractSchema,
+        :ScalarSchema,
+        :DenseSchema,
+        :RecordSchema,
+        :BlobSchema,
+        :ConstantSchema,
+        :SchemaPolicy,
+        :infer_schema,
+        :json_schema,
+        :serialization_schema,
+        :encode_value,
+        :decode_value,
+        :write_schema,
+        :read_schema,
+    )
+        @test Base.ispublic(HDF5Vectors2, name)
+    end
+
     mktempdir() do directory
 
         HDF5.h5open(joinpath(directory, "public_routing.h5"), "w") do file
