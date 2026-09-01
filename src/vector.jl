@@ -192,7 +192,10 @@ Opens and validates an existing HDF5 vector group.
 The one-argument form deserializes the exact stored schema. The explicit-type form repeats
 schema inference from the options stored when the vector was created from a type, avoiding
 schema deserialization. A vector created from an explicit schema still needs that stored
-schema unless the caller supplies the matching schema directly.
+schema unless the caller supplies a schema directly. A supplied schema is authoritative:
+loading validates that it can read the physical layout, but does not require all of its
+logical details to equal the stored schema. This can help load a file after its Julia type
+or schema implementation has changed.
 
 The returned vector remains usable only while the HDF5 file is open. Files whose schema or
 values require Julia deserialization should be trusted.

@@ -28,7 +28,7 @@ The logical length is stored at `/values/metadata/count` as a scalar `Int64`. Th
 
 The tree under `metadata/schema` describes the selected representation with ordinary HDF5 strings, integers, and groups. It records schema and codec identifiers, logical and encoded type names, dimensions, record field names, and child schemas as applicable.
 
-`serialized_schema` contains the exact Julia schema object. Ordinary untyped loading deserializes it so application-defined codecs can be recovered without a registry inside HDF5Vectors. Typed loading, such as `load_hdf5_vector(group, MyType)`, can repeat inference from the stored options and validate the result against the ordinary schema tree. Files passed to either loading form should be trusted whenever their values or schema require Julia deserialization.
+`serialized_schema` contains the exact Julia schema object. Ordinary untyped loading deserializes it so application-defined codecs can be recovered without a registry inside HDF5Vectors. Typed loading, such as `load_hdf5_vector(group, MyType)`, can repeat inference from the stored options and validate the result against the ordinary schema tree. An explicitly supplied schema is authoritative and is checked for compatibility with the physical layout rather than exact equality with the stored Julia schema. This permits deliberate migrations after a Julia type or schema implementation changes. Files passed to a loading form that deserializes either values or schemas should be trusted.
 
 External readers normally need only `metadata/count`, the documented schema information they care about, and the paths under `data`.
 
@@ -109,7 +109,7 @@ A constant schema stores no per-element values. Its data group is empty:
 /markers/metadata/count        # Number of logical marker values
 ```
 
-The constant itself is described in the schema metadata. An external reader usually needs application knowledge to assign meaning to the count.
+The constant itself is contained in the serialized Julia schema. An external reader usually needs application knowledge to assign meaning to the count. When a schema is supplied explicitly during loading, its constant is used without reading or comparing the constant in the stored Julia schema because there are no physical values whose interpretation needs to be validated.
 
 ## Julia-Serialized Values
 

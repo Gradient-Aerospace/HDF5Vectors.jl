@@ -126,6 +126,26 @@ end
             dimensions[:] = Int64[3]
             @test_throws DimensionMismatch read_schema(dense_group, NTuple{2, Char})
 
+            # A supplied schema is the caller's authoritative interpretation of the
+            # physical layout. Constant storage has no physical values, so changing its
+            # logical constant requires no comparison with the serialized stored schema.
+            stored_constant = ConstantSchema(ConstantCodec{Int64}(1))
+            constant = HDF5Vectors.create_hdf5_vector(
+                file["/"],
+                "selected_constant",
+                stored_constant,
+            )
+            push!(constant, 1)
+            push!(constant, 1)
+            supplied_constant = ConstantSchema(ConstantCodec{Int64}(2))
+            @test read_schema(file["selected_constant"], supplied_constant) ===
+                supplied_constant
+            loaded_constant = HDF5Vectors.load_hdf5_vector(
+                file["selected_constant"],
+                supplied_constant,
+            )
+            @test collect(loaded_constant) == Int64[2, 2]
+
         end
 
     end

@@ -41,7 +41,7 @@ HDF5Vectors.decode_value(schema::RaggedSchema, encoded)
 
 ## Recording the Schema
 
-Each schema writes a readable description beneath `metadata/schema` and validates that description when loading:
+Each schema writes a readable description beneath `metadata/schema`. The following methods write that description and validate its compatibility with a selected schema:
 
 ```julia
 function HDF5Vectors.write_schema_node(group::HDF5.Group, schema::RaggedSchema)
@@ -57,7 +57,7 @@ function HDF5Vectors.validate_schema_node(group::HDF5.Group, schema::RaggedSchem
 end
 ```
 
-The schema-specific metadata should use ordinary HDF5 values wherever possible so external readers can understand the representation. [`schema_identifier`](@ref) supplies the implementation identifier recorded by `write_common_schema`; an extension can specialize it when that identifier must survive a Julia type rename.
+The schema-specific metadata should use ordinary HDF5 values wherever possible so external readers can understand the representation. Validation should cover the metadata needed to select the same physical representation, such as encoded datatypes, dimensions, and child layouts. It need not require logical details to equal the stored Julia schema because an explicitly supplied schema is authoritative and may intentionally describe a migrated Julia type. The store's `open_store` method separately validates the physical groups and datasets. [`schema_identifier`](@ref) supplies the implementation identifier recorded by `write_common_schema`; an extension can specialize it when that identifier must survive a Julia type rename.
 
 The complete schema is also serialized by [`write_schema`](@ref). This is what lets ordinary untyped loading recover an extension schema without a registry inside HDF5Vectors. The extension package and its schema type must be loaded before that Julia metadata can be deserialized.
 

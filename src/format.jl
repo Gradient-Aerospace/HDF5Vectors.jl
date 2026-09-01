@@ -138,10 +138,12 @@ end
     read_schema(group::HDF5.Group, type::Type)
     read_schema(group::HDF5.Group, schema::AbstractSchema)
 
-Reads and validates the exact schema stored by [`write_schema`](@ref). Untyped loading
-deserializes the stored schema, allowing application-defined codecs to reconstruct without
-a package-owned registry. Typed loading repeats public schema inference when the vector was
-created from a type. Supplying an explicit schema avoids metadata deserialization entirely.
+Reads a schema and validates it against the ordinary stored schema description. Untyped
+loading deserializes the stored schema, allowing application-defined codecs to reconstruct
+without a package-owned registry. Typed loading repeats public schema inference when the
+vector was created from a type. Supplying an explicit schema treats that schema as
+authoritative and avoids metadata deserialization entirely. This can allow a caller to
+load physical data after the corresponding Julia type or schema implementation has changed.
 """
 function read_schema(group::HDF5.Group)
 

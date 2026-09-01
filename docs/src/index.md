@@ -50,6 +50,8 @@ end
 
 The element type and complete storage schema are recorded when the vector is created, so the usual loading form needs only the HDF5 group. When a vector was created from a type and that type is already known, `load_hdf5_vector(file["values"], Float64)` repeats schema inference from the stored options and validates it against the file without deserializing the stored schema.
 
+An application can instead call `load_hdf5_vector(file["values"], schema)` with a completed schema. This form is useful when a Julia type or schema implementation has changed enough that its old serialized schema can no longer be loaded. The supplied schema becomes the authoritative interpretation of the vector, while HDF5Vectors still checks that its physical datasets are compatible. Because the stored Julia schema is not deserialized or required to have identical logical details, this form is appropriate when the application knows that the supplied schema correctly describes the existing physical data.
+
 Scalar and range indexing follow normal Julia vector behavior. Integer-vector and logical indexing are also supported, and `collect` reads all values into an ordinary Julia `Vector`. Iteration works through the standard `AbstractVector` interface, although `collect` or range indexing is usually more efficient when many consecutive values are needed.
 
 HDF5 vectors are append-only. Existing elements cannot be replaced or removed.

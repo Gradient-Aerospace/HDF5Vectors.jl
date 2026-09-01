@@ -80,23 +80,13 @@ end
 function write_schema_node(group::HDF5.Group, schema::ConstantSchema)
     write_common_schema(group, "constant", schema)
     write_codec(group, schema.codec)
-    group["serialized_value"] = serialize_metadata_value(schema.codec.value)
     return nothing
 end
 
 function validate_schema_node(group::HDF5.Group, schema::ConstantSchema)
-
     validate_common_schema(group, "constant", schema)
     validate_codec(group, schema.codec)
-    bytes = Vector{UInt8}(read(group["serialized_value"]))
-    stored_value = deserialize_metadata_value(bytes)
-    if !isequal(stored_value, schema.codec.value)
-        throw(ArgumentError(
-            "The stored constant does not match the selected constant value.",
-        ))
-    end
     return schema
-
 end
 
 ##################
