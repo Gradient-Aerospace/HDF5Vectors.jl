@@ -1,3 +1,7 @@
+module ScalarAndConstantStorageTests
+
+include("_test_setup.jl")
+
 @testset "HDF5Vectors scalar storage" begin
 
     mktempdir() do directory
@@ -142,3 +146,5 @@ end
     end
 
 end
+
+end # module ScalarAndConstantStorageTests

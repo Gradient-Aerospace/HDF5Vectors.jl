@@ -1,3 +1,7 @@
+module PublicVectorTests
+
+include("_test_setup.jl")
+
 function test_public_hdf5_vector(
     file,
     name,
@@ -447,3 +451,5 @@ end
     end
 
 end
+
+end # module PublicVectorTests

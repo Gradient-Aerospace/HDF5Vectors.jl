@@ -1,3 +1,7 @@
+module FormatTests
+
+include("_test_setup.jl")
+
 @testset "HDF5Vectors stored schemas" begin
 
     mktempdir() do directory
@@ -127,3 +131,5 @@ end
     end
 
 end
+
+end # module FormatTests

@@ -1,3 +1,7 @@
+module RecordStorageTests
+
+include("_test_setup.jl")
+
 struct PrototypeRecordWithDenseField
     point::PrototypePoint
     label::Symbol
@@ -256,3 +260,5 @@ end
     end
 
 end
+
+end # module RecordStorageTests

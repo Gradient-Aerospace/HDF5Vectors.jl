@@ -1,3 +1,7 @@
+module SupportedTypesAndOperationsTests
+
+include("_test_setup.jl")
+
 @enum SupportedUInt8Enum::UInt8 supported_zero = 0 supported_max = 255
 @enum SupportedInt64Enum::Int64 supported_low = -3_000_000_000 supported_high = 3_000_000_000
 @enum SupportedInt128Enum::Int128 supported_int128 = 1
@@ -423,3 +427,5 @@ end
     end
 
 end
+
+end # module SupportedTypesAndOperationsTests

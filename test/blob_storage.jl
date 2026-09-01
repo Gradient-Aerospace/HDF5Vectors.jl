@@ -1,3 +1,7 @@
+module BlobStorageTests
+
+include("_test_setup.jl")
+
 @testset "HDF5Vectors blob storage" begin
 
     mktempdir() do directory
@@ -174,3 +178,5 @@ end
     end
 
 end
+
+end # module BlobStorageTests

@@ -1,3 +1,7 @@
+module DenseStorageTests
+
+include("_test_setup.jl")
+
 function zero_dimensional_array(value::T) where {T}
     array = Array{T, 0}(undef)
     array[] = value
@@ -170,3 +174,5 @@ end
     end
 
 end
+
+end # module DenseStorageTests

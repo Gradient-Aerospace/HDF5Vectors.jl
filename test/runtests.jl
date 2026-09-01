@@ -1,41 +1,5 @@
-import HDF5Vectors
-import JSON3
-using Test
-
-using HDF5Vectors:
-    AbstractCodec,
-    AbstractRecordCodec,
-    AbstractSchema,
-    ScalarSchema,
-    DenseSchema,
-    RecordSchema,
-    BlobSchema,
-    ConstantSchema,
-    IdentityCodec,
-    CharCodec,
-    SymbolCodec,
-    EnumCodec,
-    JSONCodec,
-    SerializationCodec,
-    StructCodec,
-    TupleCodec,
-    NamedTupleCodec,
-    StaticArrayCodec,
-    ConstantCodec,
-    SchemaPolicy,
-    infer_schema,
-    json_schema,
-    serialization_schema,
-    logical_type,
-    encoded_type,
-    encode_value,
-    decode_value,
-    write_schema,
-    read_schema
-import EnumX
-import HDF5
-import StaticArrays
-
+# Each included file owns a test module and its module-local setup. The same files can
+# therefore be run directly with `julia --project=test test/<file>.jl`.
 include("schema_and_codecs.jl")
 include("format.jl")
 include("scalar_and_constant_storage.jl")
