@@ -4,11 +4,11 @@
 CurrentModule = HDF5Vectors
 ```
 
-Most concrete structs work without customization when their fields have [supported types](supported_types.md). A custom storage rule is needed only when the default field-oriented representation is unsuitable or the type needs a different reconstruction process.
+Most concrete structs work without HDF5Vectors-specific methods. Customization is useful when the default field-oriented record is unsuitable or when an application type has a simpler encoded representation.
 
-## Using the Default Composite Storage
+## Starting With the Default
 
-This type needs no HDF5Vectors-specific methods:
+This type needs no custom schema:
 
 ```julia
 struct Measurement
@@ -26,76 +26,37 @@ HDF5.h5open("measurements.h5", "w") do file
 end
 ```
 
-The struct is stored field-by-field. Because no `dims` are declared for the `values` field, each `Vector{Float64}` is serialized independently. The other fields remain directly readable as HDF5 datasets. Their paths are described under [Field-Oriented Composite Values](storage_layout.md#Field-Oriented-Composite-Values).
+The `time` and `name` fields use scalar datasets. Because the dimensions of `values` were not declared separately, that field uses Julia serialization. The complete layout is recursive, so a record can combine portable and Julia-specific fields.
 
-## Selecting Julia Byte Serialization
+## Defining a Scalar Codec
 
-Only a [`storage_style`](@ref) method is needed to store an entire custom value with Julia's `Serialization` library:
-
-```julia
-struct Snapshot
-    labels::Vector{String}
-    values::Dict{String, Float64}
-end
-
-import HDF5Vectors: storage_style, ByteArrayStorageStyle
-
-storage_style(::Type{Snapshot}; kwargs...) = ByteArrayStorageStyle()
-```
-
-No [`construct`](@ref) or [`deconstruct`](@ref) method is needed because the byte-array backend serializes and deserializes the complete value. This representation is appropriate only when Julia-specific bytes are acceptable.
-
-## Selecting JSON Storage
-
-[`JSONStorageStyle`](@ref) stores one JSON string per element. The calling project needs JSON3 as a dependency, and loading JSON3 makes the HDF5Vectors JSON extension available.
+A codec is a pure conversion between a logical Julia type and an encoded type that HDF5Vectors already knows how to store. The following example stores each `Grade` as one `UInt8`:
 
 ```julia
-import JSON3
-import HDF5Vectors: storage_style, JSONStorageStyle
+using HDF5Vectors
 
-struct ServerDetails
-    hostname::String
-    active::Bool
-end
-
-storage_style(::Type{ServerDetails}; kwargs...) = JSONStorageStyle()
-```
-
-The type must be supported by `JSON3.write` and `JSON3.read(..., ServerDetails)`. The resulting strings are stored at `/vector_name/data/json/data` and can be read by non-Julia HDF5 and JSON libraries.
-
-## Defining an Elemental Representation
-
-A custom type can reuse the elemental backend by specifying an HDF5 datatype and defining conversions between that stored datatype and the Julia value. In this example, we will store grades as `UInt8` bytes:
-
-```julia
 struct Grade
     label::String
 end
 
-using HDF5Vectors
-import HDF5Vectors: storage_style, construct, deconstruct
-import HDF5Vectors: ElementalStorageStyle, HDF5VectorOfElementalTypes
+struct GradeCodec <: HDF5Vectors.AbstractCodec{Grade, UInt8} end
 
-storage_style(::Type{Grade}; kwargs...) = ElementalStorageStyle(UInt8)
-
-function deconstruct(
-    ::Type{HDF5VectorOfElementalTypes{Grade, UInt8}},
-    grade::Grade,
-)
+function HDF5Vectors.encode_value(::GradeCodec, grade::Grade)
     return UInt8(only(grade.label))
 end
 
-function construct(
-    ::Type{HDF5VectorOfElementalTypes{Grade, UInt8}},
-    value::UInt8,
-)
+function HDF5Vectors.decode_value(::GradeCodec, value::UInt8)
     return Grade(string(Char(value)))
+end
+
+function HDF5Vectors.infer_schema(::Type{Grade}; kwargs...)
+    return HDF5Vectors.ScalarSchema(GradeCodec())
 end
 ```
 
-`deconstruct` runs before a value is written, and `construct` runs after its stored representation is read. Their first argument identifies the HDF5 vector backend and both the Julia and HDF5 element types.
+The same methods work whether `Grade` is the vector's element type, a field of a struct, or the element type of a fixed-size array. Recursive inference always returns through the public [`infer_schema`](@ref) function.
 
-The type can now be used through the ordinary interface:
+The ordinary vector interface now needs no special handling:
 
 ```julia
 import HDF5
@@ -104,37 +65,109 @@ HDF5.h5open("grades.h5", "w") do file
     grades = create_hdf5_vector(file["/"], "grades", Grade)
     push!(grades, Grade("A"))
     push!(grades, Grade("B"))
-    @show read(file["grades/data"])
+    @show read(file["grades/data/values"])
     @show collect(grades)
 end
 ```
 
-## Customizing Composite Reconstruction
+The schema stores the concrete `GradeCodec` object, so untyped loading does not depend on a registry of codec names inside HDF5Vectors. The module that defines `GradeCodec` must still be loaded before Julia can deserialize that schema.
 
-Default composite reconstruction calls the declared element type with its stored field values in field order. If that constructor does not exist, a more-specific [`construct`](@ref) method can provide the appropriate reconstruction. For example, this type deliberately accepts one tuple rather than two scalar constructor arguments:
+An application can specialize [`codec_identifier`](@ref) if its human-readable metadata should remain stable when the Julia codec type is renamed.
+
+## Selecting JSON
+
+JSON storage is another scalar codec. Loading JSON3 activates the HDF5Vectors extension that supplies the JSON conversion methods. The application type must support `JSON3.write` and `JSON3.read(value, Type)`.
+
+```julia
+import JSON3
+using HDF5Vectors
+
+struct ServerDetails
+    hostname::String
+    active::Bool
+end
+
+JSON3.StructTypes.StructType(::Type{ServerDetails}) = JSON3.StructTypes.Struct()
+
+function HDF5Vectors.infer_schema(::Type{ServerDetails}; kwargs...)
+    return HDF5Vectors.json_schema(ServerDetails)
+end
+```
+
+Each value is stored as one JSON string at `/vector_name/data/values`. This makes the encoded values directly usable by non-Julia HDF5 and JSON libraries.
+
+JSON3 is a weak dependency of HDF5Vectors. Applications that select `json_schema` should include JSON3 in their own dependencies and load it before values are written or read.
+
+## Selecting Julia Serialization
+
+An application can explicitly select Julia byte serialization for a type with [`serialization_schema`](@ref):
+
+```julia
+struct Snapshot
+    labels::Vector{String}
+    values::Dict{String, Float64}
+end
+
+function HDF5Vectors.infer_schema(::Type{Snapshot}; kwargs...)
+    return HDF5Vectors.serialization_schema(Snapshot)
+end
+```
+
+No additional codec methods are needed because the built-in serialization codec converts the complete value to and from bytes. This representation is appropriate only when Julia-specific storage is acceptable.
+
+## Defining a Record Codec
+
+The default record codec reads a struct's fields and calls its constructor with those fields in order. A custom record codec can present different logical fields when that interface is unsuitable.
 
 ```julia
 struct PointFromTuple
     x::Float64
     y::Float64
-
     PointFromTuple(values::Tuple{Float64, Float64}) = new(values...)
 end
 
-import HDF5Vectors: construct, HDF5VectorOfCompositeTypes
+struct PointCodec <: HDF5Vectors.AbstractRecordCodec{PointFromTuple} end
 
-function construct(
-    ::Type{HDF5VectorOfCompositeTypes{PointFromTuple}},
-    values,
+function HDF5Vectors.decompose(::PointCodec, point::PointFromTuple)
+    return (point.x, point.y)
+end
+
+function HDF5Vectors.compose(::PointCodec, fields::Tuple)
+    return PointFromTuple((fields[1], fields[2]))
+end
+
+function HDF5Vectors.infer_schema(
+    ::Type{PointFromTuple};
+    dims = nothing,
+    policy = HDF5Vectors.SchemaPolicy(),
 )
-    return PointFromTuple((values[1], values[2]))
+    if !isnothing(dims)
+        throw(ArgumentError("PointFromTuple does not accept declared dimensions."))
+    end
+    children = (
+        HDF5Vectors.infer_schema(Float64; policy),
+        HDF5Vectors.infer_schema(Float64; policy),
+    )
+    return HDF5Vectors.RecordSchema(
+        PointFromTuple,
+        ("x", "y"),
+        PointCodec(),
+        children,
+    )
 end
 ```
 
-The default composite [`deconstruct`](@ref) method still reads `x` and `y` from the value. A custom `deconstruct` method is needed only when the stored field values must be obtained differently. It returns one value for each declared field, in field order, and HDF5Vectors uses those values consistently for `push!`, `setindex!`, and `copy_to_hdf5_vector`.
+`decompose` returns one logical value for each named child schema. Each child then performs its own recursive encoding. `compose` receives the decoded fields in the same order. This separation keeps record structure independent of the physical representation selected for each field.
 
-## Keeping Style Selection Reproducible
+## Testing a Codec
 
-[`storage_style`](@ref) is called when a vector is created and again when it is loaded. Custom methods should make the same choice from the element type and the supplied keyword options every time. Including `kwargs...`, even when a method does not currently use any options, allows it to work with the ordinary interface as shown in the examples above.
+A codec can first be tested without opening an HDF5 file:
 
-The built-in metadata preserves `dims` and `portable`. A custom storage backend can store additional options inside its own HDF5 group, but style selection during loading cannot depend on an option that is unavailable until after the style has been selected.
+```julia
+schema = HDF5Vectors.infer_schema(Grade)
+encoded = HDF5Vectors.encode_value(schema, Grade("A"))
+@assert encoded == UInt8('A')
+@assert HDF5Vectors.decode_value(schema, encoded) == Grade("A")
+```
+
+A complete integration test should also create a vector, use both `push!` and `copy_to_hdf5_vector`, inspect the encoded HDF5 dataset, close and reload the file, and verify both typed and untyped loading. If the codec is intended for record fields or fixed-size arrays, exercising that recursive use is valuable as well.

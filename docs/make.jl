@@ -17,7 +17,7 @@ makedocs(;
         "Supported Types and Options" => "supported_types.md",
         "HDF5 Storage Layout" => "storage_layout.md",
         "Custom Element Types" => "custom_element_types.md",
-        "Custom HDF5 Vector Types" => "custom_vector_types.md",
+        "Custom Schemas" => "custom_schemas.md",
         "API Reference" => "api.md",
         "When Writing Fails" => "write_failures.md",
     ],

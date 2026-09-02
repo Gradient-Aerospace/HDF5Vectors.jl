@@ -4,7 +4,7 @@
 CurrentModule = HDF5Vectors
 ```
 
-HDF5Vectors provides vectors whose underlying values live in an HDF5 file rather than in RAM. They support familiar `AbstractVector` operations and can grow over time with `push!`, making them useful for incrementally logging more data than will fit in memory. Existing Julia collections can also be copied into HDF5 layouts that are straightforward to read from other languages.
+HDF5Vectors provides append-only vectors whose values live in an HDF5 file rather than in RAM. An `HDF5Vector` supports familiar `AbstractVector` reads and grows with `push!`, which makes it useful for logging long simulations or other streams of data. Existing Julia vectors can also be copied efficiently into HDF5 layouts designed to remain understandable outside Julia.
 
 ## Installation
 
@@ -14,113 +14,83 @@ HDF5Vectors can be installed from the Julia package prompt:
 pkg> add https://github.com/Gradient-Aerospace/HDF5Vectors.jl
 ```
 
-## Getting Started
+## Creating a Vector
 
-We can create an HDF5 vector by opening an HDF5 file, selecting the group that will contain it, and specifying its name and element type. This first example creates `/x` and appends 100 `Float64` values:
+An HDF5 vector belongs to an open HDF5 group. The following example creates `/values` and appends three `Float64` values:
 
 ```julia
 import HDF5
 using HDF5Vectors
 
 HDF5.h5open("storage.h5", "w") do file
-    x = create_hdf5_vector(file["/"], "x", Float64)
-    for value in 1.0 : 100.0
-        push!(x, value)
-    end
+    values = create_hdf5_vector(file["/"], "values", Float64)
+    push!(values, 1.0)
+    push!(values, 2.0)
+    push!(values, 3.0)
 end
 ```
 
-The `do` block closes the HDF5 file when the block finishes. An HDF5 vector uses objects owned by its open file, so the vector can be used only while that file remains open.
+The `do` block closes the file when it finishes. Because an `HDF5Vector` holds open HDF5 objects, it can be used only while its file remains open.
 
-We can now open the file again and load the vector from its HDF5 group:
+The declared element type is a strict part of the interface. A vector created for `Float64` accepts `1.0`, but `push!(values, 1)` throws a `MethodError` rather than converting the integer.
+
+## Loading and Reading
+
+The vector can be loaded again by opening its group:
 
 ```julia
 HDF5.h5open("storage.h5", "r") do file
-    x = load_hdf5_vector(file["/x"])
-    @show length(x)
-    @show x[1]
-    @show x[end]
-    values = collect(x)
+    values = load_hdf5_vector(file["values"])
+    @show length(values)
+    @show values[1]
+    @show values[2:3]
+    ordinary_vector = collect(values)
 end
 ```
 
-The element type and creation options are stored in the HDF5 vector's metadata, so callers normally need to provide only the group. If the element type is already known, `load_hdf5_vector(file["/x"], Float64)` can be used instead.
+The element type and complete storage schema are recorded when the vector is created, so the usual loading form needs only the HDF5 group. When a vector was created from a type and that type is already known, `load_hdf5_vector(file["values"], Float64)` repeats schema inference from the stored options and validates it against the file without deserializing the stored schema.
 
-## Copying an Existing Collection
+An application can instead call `load_hdf5_vector(file["values"], schema)` with a completed schema. This form is useful when a Julia type or schema implementation has changed enough that its old serialized schema can no longer be loaded. The supplied schema becomes the authoritative interpretation of the vector, while HDF5Vectors still checks that its physical datasets are compatible. Because the stored Julia schema is not deserialized or required to have identical logical details, this form is appropriate when the application knows that the supplied schema correctly describes the existing physical data.
 
-When all the values already exist in Julia, [`copy_to_hdf5_vector`](@ref) can copy them into an HDF5 vector. Supported storage styles use bulk writes where possible, making this more efficient than calling `push!` for every value.
+Scalar and range indexing follow normal Julia vector behavior. Integer-vector and logical indexing are also supported, and `collect` reads all values into an ordinary Julia `Vector`. Iteration works through the standard `AbstractVector` interface, although `collect` or range indexing is usually more efficient when many consecutive values are needed.
+
+HDF5 vectors are append-only. Existing elements cannot be replaced or removed.
+
+## Copying an Existing Vector
+
+When the values already exist in Julia, [`copy_to_hdf5_vector`](@ref) creates and fills the HDF5 vector with one recursive bulk write:
 
 ```julia
 source = Float64[1, 2, 3, 4]
 
 HDF5.h5open("copied_values.h5", "w") do file
-    x = copy_to_hdf5_vector(file["/"], "x", source)
-    @show collect(x)
+    values = copy_to_hdf5_vector(file["/"], "values", source)
+    @show collect(values)
 end
 ```
 
-The copied vector uses `eltype(source)` as its declared element type.
+The declared element type is `eltype(source)`. The input must currently be an `AbstractVector`; support for general iterables may be added in a future release.
 
-## Continuing to Add Values
+## Appending After Loading
 
-An existing file can be opened with write access when more values need to be appended to a stored vector. HDF5 uses the mode `"r+"` for opening an existing file for both reading and writing.
+An existing file can be opened with `"r+"` when more values need to be appended:
 
 ```julia
 HDF5.h5open("storage.h5", "r+") do file
-    x = load_hdf5_vector(file["/x"])
-    push!(x, 101.0)
+    values = load_hdf5_vector(file["values"])
+    push!(values, 4.0)
 end
 ```
 
-## Common Vector Operations
+## Choosing a Representation
 
-### Adding Elements
+For common Julia types, HDF5Vectors infers a complete storage schema automatically. Scalars use one HDF5 dataset, fixed-size arrays are stacked along a new dimension, and structs are usually split into named field datasets. Dynamically sized arrays and nonconcrete declared types can use Julia serialization when a directly readable layout cannot be inferred.
 
-Values passed to `push!` must already be instances of the HDF5 vector's declared element type; HDF5Vectors does not convert them to that type. For example, a vector declared with element type `Float64` accepts `1.0`, but not the integer `1`.
+The remaining guides add detail:
 
-### Reading and Iterating
-
-Scalar, range, integer-vector, logical, and colon indexing follow normal Julia vector behavior. Non-scalar indexing returns an ordinary Julia `Vector`, and `collect` reads all values into a Julia `Vector`.
-
-```julia
-HDF5.h5open("storage.h5", "r") do file
-    x = load_hdf5_vector(file["/x"])
-    first_value = x[1]
-    first_ten = x[1:10]
-    selected = x[[1, 10, 20]]
-    all_values = collect(x)
-end
-```
-
-Direct iteration reads each element individually from HDF5. When the entire vector fits in memory, it is generally much faster to call [`iterable`](@ref) and iterate over its result:
-
-```julia
-HDF5.h5open("storage.h5", "r") do file
-    x = load_hdf5_vector(file["/x"])
-    result = [value^2 for value in iterable(x)]
-end
-```
-
-Currently, [`iterable`](@ref) loads the entire HDF5 vector into a Julia `Vector` before iteration. This avoids a separate HDF5 read for every element, but it requires enough memory to hold the full vector.
-
-### Replacing Elements
-
-Some storage representations support replacing an existing value with `setindex!`:
-
-```julia
-HDF5.h5open("storage.h5", "r+") do file
-    x = load_hdf5_vector(file["/x"])
-    x[10] = 42.0
-end
-```
-
-Byte-array serialization is append-only and does not support replacement. A composite vector supports replacement only when the storage representation of every field supports it. [Supported Element Types and Creation Options](supported_types.md) describes the available representations.
-
-## Choosing Types and Understanding the HDF5 File
-
-The next guides describe the available element representations and the resulting on-disk format:
-
-* [Supported Element Types and Creation Options](supported_types.md) explains which Julia types can be stored and how `dims`, `chunk_length`, and `portable` affect them.
-* [HDF5 Storage Layout](storage_layout.md) documents the datasets and groups that readers in Julia, Python, MATLAB, C++, and other environments will encounter.
-* [Custom Element Types](custom_element_types.md) starts with the existing storage representations and then shows how to define custom conversions.
-* [Custom HDF5 Vector Types](custom_vector_types.md) describes the backend interface for packages that need an entirely new on-disk representation.
+* [Supported Element Types and Creation Options](supported_types.md) describes automatic schema inference and the available creation options.
+* [HDF5 Storage Layout](storage_layout.md) shows the exact groups and datasets seen by readers in Python, MATLAB, C++, and other environments.
+* [Custom Element Types](custom_element_types.md) shows how a type can select an existing physical representation with a small codec.
+* [Custom Schemas](custom_schemas.md) describes the advanced interface for defining an entirely new physical representation.
+* [API Reference](api.md) collects the ordinary interface and extension points.
+* [When Writing to HDF5 Fails](write_failures.md) explains the limits of recovery after interrupted or unsuccessful writes.
