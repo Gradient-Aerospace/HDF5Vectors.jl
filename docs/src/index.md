@@ -8,10 +8,10 @@ HDF5Vectors provides append-only vectors whose values live in an HDF5 file rathe
 
 ## Installation
 
-HDF5Vectors can be installed from the Julia package prompt:
+HDF5Vectors can be installed from the Julia General package registry:
 
 ```
-pkg> add https://github.com/Gradient-Aerospace/HDF5Vectors.jl
+pkg> add HDF5Vectors
 ```
 
 ## Creating a Vector

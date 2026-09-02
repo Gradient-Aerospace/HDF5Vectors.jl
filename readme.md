@@ -2,10 +2,10 @@
 
 HDF5Vectors provides append-only vectors whose values live in an HDF5 file rather than in RAM. They support familiar `AbstractVector` reads and grow with `push!`, making them useful for incrementally logging more data than will fit in memory. Existing Julia vectors can also be copied efficiently into portable, documented HDF5 layouts.
 
-The package can be installed directly from GitHub:
+The package can be installed from the Julia General package registry:
 
 ```
-pkg> add https://github.com/Gradient-Aerospace/HDF5Vectors.jl
+pkg> add HDF5Vectors
 ```
 
 We can then create an HDF5 vector and append values to it:
