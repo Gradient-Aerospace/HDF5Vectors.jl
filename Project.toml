@@ -1,6 +1,6 @@
 name = "HDF5Vectors"
 uuid = "7098961b-d60d-42aa-8832-e11a9f96377b"
-version = "0.1.0"
+version = "1.0.0"
 authors = ["Tucker McClure <tucker@gradient.team>"]
 
 [deps]
