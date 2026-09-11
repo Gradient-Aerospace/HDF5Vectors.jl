@@ -32,6 +32,10 @@ function implementation_identifier(value)
     return string(parentmodule(type), ".", nameof(type))
 end
 
+function type_identifier(type::Type)
+    return sprint(show, type; context = :module => nothing)
+end
+
 """
     schema_identifier(schema::AbstractSchema)
 
@@ -122,7 +126,7 @@ function write_schema(
     metadata_group = HDF5.create_group(group, "metadata")
     metadata_group["format_name"] = format_name
     metadata_group["format_version"] = format_version
-    metadata_group["logical_type"] = string(type)
+    metadata_group["logical_type"] = type_identifier(type)
     metadata_group["serialized_schema"] = serialize_metadata_value(schema)
     write_inference_options(metadata_group, inference_options)
 
@@ -215,8 +219,9 @@ end
 
 function validate_type_name(group::HDF5.Group, type::Type)
     stored_name = read_string(group, "logical_type")
-    expected_name = string(type)
-    if stored_name != expected_name
+    expected_name = type_identifier(type)
+    legacy_name = string(type)
+    if stored_name != expected_name && stored_name != legacy_name
         throw(ArgumentError(
             "The stored schema describes $stored_name, but $expected_name was requested.",
         ))
@@ -238,13 +243,13 @@ read_string(group::HDF5.Group, name::AbstractString) = String(read(group[name]))
 function write_common_schema(group::HDF5.Group, kind, schema)
     group["kind"] = kind
     group["schema"] = schema_identifier(schema)
-    group["logical_type"] = string(logical_type(schema))
+    group["logical_type"] = type_identifier(logical_type(schema))
     return nothing
 end
 
 """Writes the scalar encoded type used by a scalar or dense schema."""
 function write_encoded_type(group::HDF5.Group, schema)
-    group["encoded_type"] = string(encoded_type(schema))
+    group["encoded_type"] = type_identifier(encoded_type(schema))
     return nothing
 end
 
@@ -292,8 +297,10 @@ end
 """Validates a scalar or dense schema node's stored encoded type."""
 function validate_encoded_type(group::HDF5.Group, schema)
     stored_name = read_string(group, "encoded_type")
-    expected_name = string(encoded_type(schema))
-    if stored_name != expected_name
+    type = encoded_type(schema)
+    expected_name = type_identifier(type)
+    legacy_name = string(type)
+    if stored_name != expected_name && stored_name != legacy_name
         throw(ArgumentError(
             "The stored encoded type is $stored_name, but the codec uses $expected_name.",
         ))
