@@ -1,3 +1,13 @@
+module HDF5VectorsVisibilityFixtures
+
+export VisibilityRecord
+
+struct VisibilityRecord
+    value::Float64
+end
+
+end
+
 module FormatTests
 
 include("_test_setup.jl")
@@ -71,7 +81,7 @@ include("_test_setup.jl")
             @test read(metadata["schema/kind"]) == "record"
             @test read(metadata["schema/field_names"]) == ["x", "y"]
             @test read(metadata["schema/children/1/kind"]) == "scalar"
-            @test read(metadata["schema/children/1/encoded_type"]) == "Float64"
+            @test read(metadata["schema/children/1/encoded_type"]) == "Core.Float64"
 
             # Codec metadata is descriptive rather than a package-owned reconstruction
             # registry. The serialized schema and the public typed-inference path both
@@ -95,6 +105,59 @@ include("_test_setup.jl")
             @test read_schema(file["native_record"], PrototypePoint) isa ScalarSchema
 
         end
+
+    end
+
+end
+
+@testset "HDF5Vectors type identifiers" begin
+
+    mktempdir() do directory
+
+        filename = joinpath(directory, "type_identifiers.h5")
+        type = Main.HDF5VectorsVisibilityFixtures.VisibilityRecord
+
+        # Julia's default type display depends on which names are visible in the active
+        # module. Write the schema while the exported type is available only by its
+        # qualified name.
+        qualified_name = string(type)
+        HDF5.h5open(filename, "w") do file
+            vector = HDF5Vectors.create_hdf5_vector(file["/"], "records", type)
+            push!(vector, type(1.5))
+        end
+
+        # Bringing the type into scope changes its default display, but it must not change
+        # the identifier used to validate the stored schema.
+        @eval Main using .HDF5VectorsVisibilityFixtures
+        unqualified_name = Core.eval(Main, :(string($type)))
+        @test unqualified_name == "VisibilityRecord"
+        @test unqualified_name != qualified_name
+        records = Core.eval(Main, quote
+            FormatTests.HDF5.h5open($filename, "r") do file
+                vector = FormatTests.HDF5Vectors.load_hdf5_vector(file["records"])
+                return collect(vector)
+            end
+        end)
+        @test records == [type(1.5)]
+
+        # Files written by the previous implementation can contain the context-dependent
+        # short name. Continue to accept that spelling when Julia resolves it to the
+        # requested type in the current module.
+        HDF5.h5open(filename, "r+") do file
+            metadata = file["records/metadata"]
+            HDF5.delete_object(metadata, "logical_type")
+            metadata["logical_type"] = unqualified_name
+            schema = metadata["schema"]
+            HDF5.delete_object(schema, "logical_type")
+            schema["logical_type"] = unqualified_name
+        end
+        legacy_records = Core.eval(Main, quote
+            FormatTests.HDF5.h5open($filename, "r") do file
+                vector = FormatTests.HDF5Vectors.load_hdf5_vector(file["records"])
+                return collect(vector)
+            end
+        end)
+        @test legacy_records == [type(1.5)]
 
     end
 

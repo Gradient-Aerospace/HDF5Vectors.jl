@@ -26,7 +26,7 @@ The logical length is stored at `/values/metadata/count` as a scalar `Int64`. Th
 /values/metadata/serialized_schema
 ```
 
-The tree under `metadata/schema` describes the selected representation with ordinary HDF5 strings, integers, and groups. It records schema and codec identifiers, logical and encoded type names, dimensions, record field names, and child schemas as applicable.
+The tree under `metadata/schema` describes the selected representation with ordinary HDF5 strings, integers, and groups. It records schema and codec identifiers, logical and encoded type names, dimensions, record field names, and child schemas as applicable. Julia type names include their defining modules so their spelling does not depend on the names imported by the process that writes or reads the file.
 
 `serialized_schema` contains the exact Julia schema object. Ordinary untyped loading deserializes it so application-defined codecs can be recovered without a registry inside HDF5Vectors. Typed loading, such as `load_hdf5_vector(group, MyType)`, can repeat inference from the stored options and validate the result against the ordinary schema tree. An explicitly supplied schema is authoritative and is checked for compatibility with the physical layout rather than exact equality with the stored Julia schema. This permits deliberate migrations after a Julia type or schema implementation changes. Files passed to a loading form that deserializes either values or schemas should be trusted.
 
