@@ -1,6 +1,8 @@
 # Change Log for HDF5Vectors
 
-## Unreleased
+## v1.0.1
+
+### Bug Fixes
 
 * Fixed a bug where types were recorded as their display names, which changes depending on how they're imported, rather than fully-qualified types.
 
