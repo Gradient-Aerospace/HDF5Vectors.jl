@@ -99,8 +99,9 @@ unused HDF5 path component. Schema inference selects and records the complete ph
 representation before the vector is returned.
 
 `dims` declares the fixed shape of a dynamically sized array element. `chunk_length`
-controls the extensible dimension of physical HDF5 chunks. `portable = true` gives bits-type
-records field-oriented storage. `serialize_arrays` and `serialize_nonconcrete` control
+controls the extensible dimension of physical HDF5 chunks; blob byte chunks have a minimum
+size of 65536 bytes, independently of their logical stop chunks. `portable = true` gives
+bits-type records field-oriented storage. `serialize_arrays` and `serialize_nonconcrete` control
 whether schema inference may select Julia serialization for those categories.
 
 Values later passed to `push!` must already have exactly the declared element type.

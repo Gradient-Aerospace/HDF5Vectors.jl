@@ -1,5 +1,11 @@
 # Change Log for HDF5Vectors
 
+## Unreleased
+
+### Bug Fixes
+
+* Fixed excessive memory use when saving serialized values, including arrays nested in records, with small logical chunk lengths. Blob byte chunks now have a minimum size of 65536 bytes; logical offset chunks and existing-file compatibility are unchanged.
+
 ## v1.0.1
 
 ### Bug Fixes
