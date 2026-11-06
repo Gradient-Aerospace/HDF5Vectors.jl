@@ -90,13 +90,16 @@ function create_store(
     chunk_length,
 )
 
+    # Byte payload sizes are independent of logical record counts. A byte chunk floor
+    # bounds HDF5 chunk metadata overhead even when a record contains one large array.
+    byte_chunk_length = max(chunk_length, 65536)
     dataspace = HDF5.dataspace((0,), (-1,))
     bytes = HDF5.create_dataset(
         group,
         "bytes",
         UInt8,
         dataspace;
-        chunk = (chunk_length,),
+        chunk = (byte_chunk_length,),
     )
     stops = HDF5.create_dataset(
         group,

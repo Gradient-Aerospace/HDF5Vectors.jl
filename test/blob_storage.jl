@@ -179,4 +179,117 @@ end
 
 end
 
+@testset "HDF5Vectors blob byte chunks" begin
+
+    mktempdir() do directory
+
+        path = joinpath(directory, "blob_chunks.h5")
+        values = [(samples = Float32[1, 2, 3],), (samples = Float32[],)]
+        HDF5.h5open(path, "w") do file
+
+            # A one-record chunk must not turn a nested serialized array into one-byte
+            # chunks. Both ordinary pushes and bulk copies share this storage policy.
+            root = HDF5.create_group(file, "vectors")
+            pushed = HDF5Vectors.create_hdf5_vector(
+                root,
+                "pushed",
+                eltype(values);
+                chunk_length = 1,
+            )
+            append!(pushed, values)
+            HDF5Vectors.copy_to_hdf5_vector(
+                root,
+                "bulk",
+                values;
+                chunk_length = 1,
+            )
+            for name in ("pushed", "bulk")
+
+                bytes = root["$name/data/samples/bytes"]
+                stops = root["$name/data/samples/stops"]
+                @test HDF5.get_chunk(bytes) == (65536,)
+                @test HDF5.get_num_chunks(bytes) == 1
+                @test HDF5.get_chunk(stops) == (1,)
+                schema = serialization_schema(Vector{Float32})
+                encoded = [encode_value(schema, value.samples) for value in values]
+                @test read(stops) == cumsum(length.(encoded))
+                @test read(bytes) == vcat(encoded...)
+
+            end
+
+        end
+
+        # Closing the file exercises normal metadata and schema reconstruction on reload.
+        HDF5.h5open(path, "r") do file
+            for name in ("pushed", "bulk")
+                loaded = HDF5Vectors.load_hdf5_vector(file["vectors/$name"])
+                @test collect(loaded) == values
+            end
+        end
+
+    end
+
+end
+
+@testset "HDF5Vectors blob chunk boundaries" begin
+
+    mktempdir() do directory
+
+        path = joinpath(directory, "blob_boundaries.h5")
+        values = [
+            (samples = Float32.(1:10000),),
+            (samples = Float32.(10001:20000),),
+            (samples = Float32[],),
+        ]
+        HDF5.h5open(path, "w") do file
+
+            # The combined payload crosses a byte chunk boundary in both write paths,
+            # while each stop still occupies its requested one-record chunk.
+            root = HDF5.create_group(file, "vectors")
+            pushed = HDF5Vectors.create_hdf5_vector(
+                root,
+                "pushed",
+                eltype(values);
+                chunk_length = 1,
+            )
+            append!(pushed, values)
+            HDF5Vectors.copy_to_hdf5_vector(
+                root,
+                "bulk",
+                values;
+                chunk_length = 1,
+            )
+            for name in ("pushed", "bulk")
+                bytes = root["$name/data/samples/bytes"]
+                @test HDF5.get_num_chunks(bytes) == 2
+            end
+
+        end
+
+        # Appending after reopening must preserve stops and span another byte boundary.
+        extra = (samples = Float32.(1:20000),)
+        HDF5.h5open(path, "r+") do file
+            for name in ("pushed", "bulk")
+                loaded = HDF5Vectors.load_hdf5_vector(file["vectors/$name"])
+                @test collect(loaded) == values
+                push!(loaded, extra)
+            end
+        end
+        expected = [values; extra]
+        HDF5.h5open(path, "r") do file
+            for name in ("pushed", "bulk")
+                loaded = HDF5Vectors.load_hdf5_vector(file["vectors/$name"])
+                @test collect(loaded) == expected
+                @test loaded[2:4] == expected[2:4]
+                @test loaded[4] == extra
+                bytes = file["vectors/$name/data/samples/bytes"]
+                @test HDF5.get_num_chunks(bytes) == 3
+                @test HDF5.get_chunk(file["vectors/$name/data/samples/stops"]) == (1,)
+            end
+        end
+
+    end
+
+end
+
 end # module BlobStorageTests
